@@ -17,7 +17,7 @@ import plotly.express as px
 # --- 1. PAGE CONFIG & UI OVERRIDES ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🌧️")
 
-# Custom CSS to fix the sidebar visibility, remove margins, and size the map
+# Custom CSS to fix the sidebar toggle, remove margins, and size the map
 st.markdown("""
     <style>
         /* 1. Remove padding around the main app container */
@@ -28,26 +28,30 @@ st.markdown("""
             padding-right: 0.5rem !important;
             max-width: 100%;
         }
-        /* 2. Hide the top header bar but KEEP the sidebar toggle visible */
+        /* 2. Style the Header to be transparent but KEEP it in the DOM */
         [data-testid="stHeader"] {
             background-color: rgba(0,0,0,0);
-            height: 2.5rem;
+            height: 3rem;
+            visibility: visible;
         }
-        /* 3. Style the Sidebar Toggle button so it doesn't get lost */
+        /* 3. Style the Sidebar Toggle button (the arrow) so it is ALWAYS visible */
         [data-testid="stSidebarCollapsedControl"] {
             background-color: #262730;
             color: white;
             border-radius: 0 5px 5px 0;
             top: 10px;
+            left: 0px;
+            visibility: visible;
+            display: flex !important;
         }
-        /* 4. Force the Map Iframe to be long (90% of viewport height) */
+        /* 4. Force the Map Iframe to be long (75% of viewport height) */
         iframe {
             height: 75vh !important;
             width: 100% !important;
         }
-        /* 5. Style the Time Slider container at the bottom */
+        /* 5. Ensure the slider at the bottom is styled cleanly */
         .stSlider {
-            padding-bottom: 20px;
+            padding: 10px 20px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -145,7 +149,7 @@ with st.sidebar:
 
 # --- 5. MAIN PAGE LAYOUT ---
 
-# Define the map first
+# Define the map container
 m = leafmap.Map(center=[40.1, -74.5], zoom=8)
 
 # Add Shapefile
@@ -154,25 +158,26 @@ if active_gdf is not None:
     if not st.session_state.time_list:
         m.zoom_to_gdf(active_gdf)
 
-# Display the Map (Takes up the majority of the screen length)
+# Display the Map (High visibility, takes 75% of screen length)
 map_placeholder = st.empty()
 
 # Add Time Slider BELOW the map
 view_time = None
 if st.session_state.time_list:
-    st.write("---") # Visual separator
-    view_time = st.select_slider("🕰️ View Radar at Time:", options=st.session_state.time_list)
+    st.markdown("### 🕰️ Radar Time Selection")
+    view_time = st.select_slider("Slide to change radar view time:", options=st.session_state.time_list)
 
 # Add Raster to map if slider is moved
 if view_time and view_time in st.session_state.raster_cache:
     m.add_raster(st.session_state.raster_cache[view_time], layer_name="Radar", colormap="jet", opacity=0.5)
 
-# Render the Map in the placeholder
+# Render the Map
 with map_placeholder:
     m.to_streamlit(responsive=True)
 
-# --- 6. RESULTS (STATISTICS) ---
+# --- 6. RESULTS SECTION ---
 if st.session_state.processed_df is not None:
+    st.write("---")
     st.write("### 📊 Extracted Rainfall Statistics")
     col_a, col_b = st.columns([3, 1])
     with col_a:
