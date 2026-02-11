@@ -173,6 +173,13 @@ st.markdown("""
 # =============================
 # 3) STATE
 # =============================
+if st.session_state.time_list:
+    st.session_state.current_time_index = int(
+        np.clip(st.session_state.current_time_index, 0, len(st.session_state.time_list) - 1)
+    )
+else:
+    st.session_state.current_time_index = 0
+
 if "radar_cache" not in st.session_state: st.session_state.radar_cache = {}
 if "time_list" not in st.session_state: st.session_state.time_list = []
 if "active_gdf" not in st.session_state: st.session_state.active_gdf = None
@@ -420,7 +427,10 @@ with st.sidebar:
                     cache[lbl] = {"path": img, "bounds": bnds}
                     stats.append({"time": tdt, "rain_in": watershed_mean_inch(s_frame, st.session_state.active_gdf)})
 
-            st.session_state.radar_cache, st.session_state.time_list = cache, list(cache.keys())
+            st.session_state.is_playing = False
+            st.session_state.current_time_index = 0
+            st.session_state.radar_cache = cache
+            st.session_state.time_list = list(cache.keys())
             st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
             msg.success("Complete."); st.rerun()
         except Exception as e:
@@ -429,10 +439,13 @@ with st.sidebar:
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
 # =============================
-if st.session_state.time_list and st.session_state.is_playing:
-    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
-    time.sleep(0.5)
-    st.rerun()
+if st.session_state.is_playing:
+    n = len(st.session_state.time_list)
+    if n > 0:
+        st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
+        time.sleep(0.5)
+        st.rerun()
+
 
 # --- MAP DISPLAY ---
 layers = []
@@ -469,14 +482,18 @@ if st.session_state.time_list:
                 st.rerun()
 
         with col_slider:
+            n = len(st.session_state.time_list)
+            st.session_state.current_time_index = max(0, min(int(st.session_state.current_time_index), n-1))
+            
             idx = st.select_slider(
                 "Timeline",
-                options=list(range(len(st.session_state.time_list))),
+                options=list(range(n)),
                 value=int(st.session_state.current_time_index),
-                format_func=lambda i: st.session_state.time_list[i],
+                format_func=lambda i: st.session_state.time_list[i] if 0 <= i < n else "",
                 label_visibility="collapsed",
                 key="timeline_slider"
             )
+
             if idx != st.session_state.current_time_index:
                 st.session_state.current_time_index = idx
                 st.session_state.is_playing = False
@@ -541,6 +558,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
