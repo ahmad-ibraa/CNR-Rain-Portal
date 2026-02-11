@@ -10,46 +10,40 @@ import tempfile
 import os
 import zipfile
 import pydeck as pdk
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# --- 1. PAGE CONFIG ---
+# --- 1. PAGE CONFIG & FULL-HEIGHT CSS ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
 
-# --- 2. THE "IRONCLAD" CSS ---
-# This targets the entire Streamlit hierarchy to force the map to 85% of your screen
 st.markdown("""
     <style>
-        /* Force the main scroll area to be tight */
-        .main .block-container {
-            padding: 1rem 2rem 0rem 2rem !important;
-            max-width: 100% !important;
+        .block-container { padding: 1rem 2rem 0rem 2rem !important; }
+        div[data-testid="stPydeckChart"], iframe {
+            height: 80vh !important;
+            min-height: 700px !important;
         }
-
-        /* Target every possible wrapper of the Pydeck chart */
-        div[data-testid="stPydeckChart"], 
-        div[data-testid="stPydeckChart"] > div, 
-        iframe[title="pydeck.deck.Deck"] {
-            height: 85vh !important;
-            min-height: 800px !important;
-            width: 100% !important;
-        }
-
-        /* Hide the decoration bar at the top to save space */
-        header[data-testid="stHeader"] {
-            display: none !important;
-        }
+        header { display: none !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. SESSION STATE ---
+# --- 2. SESSION STATE ---
 if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'map_data_cache' not in st.session_state: st.session_state.map_data_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
 if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
-if 'current_idx' not in st.session_state: st.session_state.current_idx = 0
-if 'playing' not in st.session_state: st.session_state.playing = False
+if 'view_state' not in st.session_state: st.session_state.view_state = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=8)
+
+# --- 3. NEXRAD COLOR PALETTE ---
+# Standard rainfall colors: Light Blue -> Dark Blue -> Green -> Yellow -> Red
+RAIN_COLORS = [
+    [0, 191, 255, 140],   # DeepSkyBlue
+    [0, 0, 255, 160],     # Blue
+    [0, 255, 0, 180],     # Green
+    [255, 255, 0, 200],   # Yellow
+    [255, 165, 0, 220],   # Orange
+    [255, 0, 0, 240]      # Red
+]
 
 # --- 4. DATA PROCESSING ---
 def get_mrms_points(dt_utc):
@@ -60,7 +54,6 @@ def get_mrms_points(dt_utc):
     try:
         r = requests.get(url, stream=True, timeout=10)
         if r.status_code != 200: return None, 0.0
-        
         with gzip.GzipFile(fileobj=r.raw) as gz, open(tmp_path, "wb") as f:
             shutil.copyfileobj(gz, f)
             
@@ -102,6 +95,11 @@ with st.sidebar:
             shps = list(Path(td).rglob("*.shp"))
             if shps:
                 st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
+                b = st.session_state.active_gdf.total_bounds
+                # Set the initial view once when file is uploaded
+                st.session_state.view_state = pdk.ViewState(
+                    latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=11
+                )
 
     if st.button("🚀 Process Data", use_container_width=True):
         if st.session_state.active_gdf is not None:
@@ -113,8 +111,7 @@ with st.sidebar:
             for i, ts in enumerate(tr):
                 ts_utc = ts if tz_mode == "UTC" else ts + timedelta(hours=5) 
                 pts_df, rain_val = get_mrms_points(ts_utc)
-                t_str = ts.strftime("%Y-%m-%d %H:%M")
-                if pts_df is not None: map_cache[t_str] = pts_df
+                if pts_df is not None: map_cache[ts.strftime("%Y-%m-%d %H:%M")] = pts_df
                 stats_list.append({"time": ts, "rain_in": rain_val})
                 pb.progress((i+1)/len(tr))
             st.session_state.processed_df = pd.DataFrame(stats_list)
@@ -122,56 +119,39 @@ with st.sidebar:
             st.session_state.time_list = list(map_cache.keys())
 
 # --- 6. MAIN CONTENT ---
-map_spot = st.empty()
+st.subheader("Radar GIS Viewer")
 
-def render_deck(idx=0):
-    layers = []
-    lat, lon, zoom = 40.7, -74.0, 8
+if st.session_state.time_list:
+    current_idx = st.select_slider("Timeline", options=range(len(st.session_state.time_list)), 
+                                   format_func=lambda x: st.session_state.time_list[x])
+    
+    df = st.session_state.map_data_cache[st.session_state.time_list[current_idx]]
+    
+    layers = [
+        # GridLayer uses real-world meters, so it scales with zoom
+        pdk.Layer(
+            "GridLayer",
+            df,
+            get_position=["longitude", "latitude"],
+            cell_size=1000,  # 1km resolution matches MRMS
+            extruded=False,
+            elevation_scale=0,
+            get_fill_color="val", # We let the color_range handle the scale
+            color_range=RAIN_COLORS,
+            pickable=True,
+        )
+    ]
     
     if st.session_state.active_gdf is not None:
-        b = st.session_state.active_gdf.total_bounds
-        lat, lon, zoom = (b[1]+b[3])/2, (b[0]+b[2])/2, 11
         layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
-                                stroked=True, filled=True, get_fill_color=[255, 255, 255, 40],
-                                get_line_color=[255, 255, 255], line_width_min_pixels=2))
+                                stroked=True, filled=True, get_fill_color=[255, 255, 255, 20],
+                                get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
-    if st.session_state.time_list and idx < len(st.session_state.time_list):
-        df = st.session_state.map_data_cache[st.session_state.time_list[idx]]
-        if not df.empty:
-            layers.append(pdk.Layer("ScreenGridLayer", df, get_position=["longitude", "latitude"], 
-                                    get_weight="val", cell_size_pixels=12, 
-                                    color_range=[[0,255,255,100],[0,0,255,180],[255,0,0,230]]))
-
-    with map_spot:
-        st.pydeck_chart(pdk.Deck(
-            layers=layers,
-            initial_view_state=pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom),
-            map_style="light" 
-        ), use_container_width=True)
-
-# Animation / Timeline
-if st.session_state.time_list:
-    cp, cs = st.columns([1, 5])
-    if cp.button("⏹️ Stop" if st.session_state.playing else "▶️ Play"):
-        st.session_state.playing = not st.session_state.playing
-        st.rerun()
-    
-    st.session_state.current_idx = cs.select_slider("Timeline", 
-                                                   options=range(len(st.session_state.time_list)), 
-                                                   format_func=lambda x: st.session_state.time_list[x])
-    
-    if st.session_state.playing:
-        for i in range(st.session_state.current_idx, len(st.session_state.time_list)):
-            st.session_state.current_idx = i
-            render_deck(i)
-            time.sleep(0.4)
-            if not st.session_state.playing: break
-        st.session_state.playing = False
-        st.rerun()
-    else:
-        render_deck(st.session_state.current_idx)
-else:
-    render_deck()
+    st.pydeck_chart(pdk.Deck(
+        layers=layers,
+        initial_view_state=st.session_state.view_state,
+        map_style="light"
+    ))
 
 # --- 7. CHART ---
 if st.session_state.processed_df is not None and not st.session_state.processed_df.empty:
