@@ -17,7 +17,7 @@ from matplotlib.colors import ListedColormap
 import rioxarray
 import time
 import base64
-from zoneinfo import ZoneInfo
+import calendar
 
 # =============================
 # 1) PAGE CONFIG
@@ -205,7 +205,6 @@ RADAR_CMAP = ListedColormap(RADAR_COLORS)
 MRMS_S3_BASE = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/MultiSensor_QPE_01H_Pass2_00.00"
 RO_S3_BASE   = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00"
 
-NY_TZ = ZoneInfo("America/New_York")
 
 def csv_download_link(df: pd.DataFrame, filename: str, label: str):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
@@ -216,10 +215,30 @@ def csv_download_link(df: pd.DataFrame, filename: str, label: str):
         unsafe_allow_html=True,
     )
 
+
+
+def ny_is_dst(dt_local: datetime) -> bool:
+    """Return True if dt_local is in EDT (DST), else EST, using US rules."""
+    year = dt_local.year
+    c = calendar.Calendar(firstweekday=6)  # Sunday=0 in monthdayscalendar weeks
+
+    # DST starts: 2nd Sunday in March at 2:00
+    march_weeks = c.monthdayscalendar(year, 3)
+    march_sundays = [w[0] for w in march_weeks if w[0] != 0]
+    dst_start = datetime(year, 3, march_sundays[1], 2, 0)
+
+    # DST ends: 1st Sunday in November at 2:00
+    nov_weeks = c.monthdayscalendar(year, 11)
+    nov_sundays = [w[0] for w in nov_weeks if w[0] != 0]
+    dst_end = datetime(year, 11, nov_sundays[0], 2, 0)
+
+    return dst_start <= dt_local < dst_end
+
 def local_to_utc(dt_local: datetime) -> datetime:
-    """Interpret dt_local as America/New_York and convert to UTC."""
-    aware = dt_local.replace(tzinfo=NY_TZ)
-    return aware.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    """Convert NY local naive datetime -> UTC naive datetime."""
+    offset = 4 if ny_is_dst(dt_local) else 5
+    return dt_local + timedelta(hours=offset)
+
 
 def ceil_to_hour(dt: datetime) -> datetime:
     """Ceil a naive datetime to the next hour (if not already on the hour)."""
@@ -605,3 +624,4 @@ if st.session_state.time_list:
         f'<div id="time-float">{st.session_state.time_list[st.session_state.current_time_index]}</div>',
         unsafe_allow_html=True,
     )
+
