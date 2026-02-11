@@ -428,3 +428,77 @@ if st.session_state.time_list:
     with c3: st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
     st.markdown("</div>", unsafe_allow_html=True)
 
+
+# =============================
+# 6) ANIMATION & MAIN DISPLAY
+# =============================
+if st.session_state.time_list and st.session_state.is_playing:
+    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
+    time.sleep(0.5)
+    st.rerun()
+
+# --- MAP DISPLAY ---
+layers = []
+if st.session_state.time_list:
+    curr = st.session_state.radar_cache[st.session_state.time_list[st.session_state.current_time_index]]
+    layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
+if st.session_state.active_gdf is not None:
+    layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
+
+st.pydeck_chart(pdk.Deck(
+    layers=layers, 
+    initial_view_state=st.session_state.map_view, 
+    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+), use_container_width=True, height=1000)
+
+# =============================
+# 7) FLOATING CONTROLS (The Slider)
+# =============================
+if st.session_state.time_list:
+    st.markdown('<div class="control-bar">', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 10, 2])
+    with c1:
+        if st.button("⏸" if st.session_state.is_playing else "▶", key="play_btn"):
+            st.session_state.is_playing = not st.session_state.is_playing
+            st.rerun()
+    with c2:
+        # Fixed Slider logic
+        idx = st.select_slider(
+            "Timeline", 
+            options=list(range(len(st.session_state.time_list))), 
+            value=int(st.session_state.current_time_index), 
+            format_func=lambda i: st.session_state.time_list[i], 
+            label_visibility="collapsed", 
+            key="timeline_slider"
+        )
+        if idx != st.session_state.current_time_index:
+            st.session_state.current_time_index = idx
+            st.session_state.is_playing = False # Stop playing if user drags slider
+            st.rerun()
+    with c3: 
+        st.markdown(f'<p style="color:white; margin-top:10px;"><b>{st.session_state.time_list[st.session_state.current_time_index]}</b></p>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# =============================
+# 8) OUTPUTS (Plot & Downloads)
+# =============================
+# These appear in the sidebar under the processing button
+with st.sidebar:
+    if st.session_state.basin_vault:
+        st.divider()
+        st.subheader("Data Analysis")
+        
+        # Get the dataframe for the current basin
+        current_basin_df = st.session_state.basin_vault[basin_name]
+        
+        # --- SHOW PLOT ---
+        fig, ax = plt.subplots(figsize=(5, 3))
+        ax.plot(current_basin_df["time"], current_basin_df["rain_in"], color="#01a0fe", lw=2)
+        ax.set_ylabel("Avg Rain (in)")
+        ax.set_title(f"Rainfall: {basin_name}")
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
+        
+        # --- DOWNLOADS ---
+        st.write("### Exports")
+        csv_download_link(current_basin_df, f"{basin_name}_rainfall.csv", f"Download {basin_name} CSV")
