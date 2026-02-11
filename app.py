@@ -33,6 +33,7 @@ if 'time_list' not in st.session_state: st.session_state.time_list = []
 if 'playing' not in st.session_state: st.session_state.playing = False
 if 'current_idx' not in st.session_state: st.session_state.current_idx = 0
 if 'shp_name' not in st.session_state: st.session_state.shp_name = "output"
+if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
 
 # --- 3. HELPERS ---
 def get_tz_offset(dt):
@@ -40,12 +41,16 @@ def get_tz_offset(dt):
     edt_e = datetime(dt.year, 11, 1 + (6 - datetime(dt.year, 11, 1).weekday()) % 7)
     return 4 if edt_s <= dt < edt_e else 5
 
-now_utc = datetime.utcnow()
-max_allowed_utc = now_utc - timedelta(hours=1)
+# Set Global Constants
+now = datetime.now()
+yesterday = now - timedelta(days=1)
+max_allowed_utc = datetime.utcnow() - timedelta(hours=1)
 
 def download_mrms(dt_utc):
-    ts = dt_utc.strftime("%Y%m%d-%H%M00")
+    # Automatically adjust to the 15-minute mark of the selected hour
+    ts = dt_utc.strftime("%Y%m%d-%H1500") 
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts}.grib2.gz"
+    
     tmp = tempfile.NamedTemporaryFile(suffix=".grib2", delete=False).name
     try:
         r = requests.get(url, stream=True, timeout=10)
@@ -62,40 +67,34 @@ def download_mrms(dt_utc):
         if os.path.exists(tmp): os.remove(tmp)
     return None
 
-# --- 4. SIDEBAR (Full Restoration) ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("🛰️ CNR Portal")
     tz_mode = st.radio("Timezone", ["Local (EST/EDT)", "UTC"], index=0)
     
-    max_view_dt = max_allowed_utc if tz_mode == "UTC" else (max_allowed_utc - timedelta(hours=get_tz_offset(max_allowed_utc)))
+    # Defaulting both dates to yesterday
+    start_d = st.date_input("Start Date", value=yesterday.date(), max_value=yesterday.date())
+    end_d = st.date_input("End Date", value=yesterday.date(), max_value=yesterday.date())
     
-    # Date Inputs
-    start_d = st.date_input("Start Date", value=max_view_dt - timedelta(days=1), max_value=max_view_dt.date())
-    end_d = st.date_input("End Date", value=max_view_dt.date(), max_value=max_view_dt.date())
-    
-    # Time Inputs
+    # Hourly selection only
     hours = [f"{h:02d}:00" for h in range(24)]
-    if end_d == max_view_dt.date():
-        hours = [f"{h:02d}:00" for h in range(max_view_dt.hour + 1)]
-
-    c1, c2 = st.columns(2)
-    start_t = c1.selectbox("Start Time", hours, index=0)
-    end_t = c2.selectbox("End Time", hours, index=len(hours)-1)
     
-    # File Uploader
+    c1, c2 = st.columns(2)
+    start_t = c1.selectbox("Start Hour", hours, index=0)
+    end_t = c2.selectbox("End Hour", hours, index=23)
+    
     up_zip = st.file_uploader("Upload ZIP Shapefile", type="zip")
-    active_gdf = None
     if up_zip:
         with tempfile.TemporaryDirectory() as td:
             with zipfile.ZipFile(up_zip, 'r') as z: z.extractall(td)
             shps = list(Path(td).rglob("*.shp"))
             if shps:
                 st.session_state.shp_name = shps[0].stem
-                active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
+                st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
 
     if st.button("🚀 Process & Export", use_container_width=True):
-        if active_gdf is not None:
-            with st.spinner("Processing Radar Data..."):
+        if st.session_state.active_gdf is not None:
+            with st.spinner("Processing Hourly Samples..."):
                 s_dt = datetime.combine(start_d, datetime.strptime(start_t, "%H:%M").time())
                 e_dt = datetime.combine(end_d, datetime.strptime(end_t, "%H:%M").time())
                 tr = pd.date_range(s_dt, e_dt, freq='1H')
@@ -106,14 +105,14 @@ with st.sidebar:
                     ts_utc = ts if tz_mode == "UTC" else ts + timedelta(hours=get_tz_offset(ts))
                     da = download_mrms(ts_utc)
                     if da is not None:
-                        # Prepare map raster
+                        # Visualization
                         map_da = da.where(da > 0.1, np.nan)
                         tf = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
                         map_da.rio.to_raster(tf)
                         rc[ts.strftime("%Y-%m-%d %H:%M")] = tf
                         
-                        # Prepare CSV stats
-                        clipped = da.rio.clip(active_gdf.geometry, active_gdf.crs, all_touched=True)
+                        # Stats
+                        clipped = da.rio.clip(st.session_state.active_gdf.geometry, st.session_state.active_gdf.crs, all_touched=True)
                         mean_val = float(clipped.mean()) if not clipped.isnull().all() else 0.0
                         sl.append({"time": ts, "rain_in": max(0.0, mean_val/25.4)})
                     else:
@@ -123,30 +122,26 @@ with st.sidebar:
                 st.session_state.processed_df = pd.DataFrame(sl).fillna(0.0).set_index("time")
                 st.session_state.raster_cache = rc
                 st.session_state.time_list = list(rc.keys())
-        else: st.warning("Please upload a ZIP shapefile.")
+        else: st.warning("Please upload a ZIP shapefile first.")
 
-# --- 5. MAIN CONTENT (Map & Playback) ---
+# --- 5. MAIN CONTENT ---
 map_placeholder = st.empty()
 
-def render_frame(idx):
-    """Helper to draw map into the placeholder."""
+def render_map(idx=None):
     m = leafmap.Map(center=[40.1, -74.5], zoom=8)
-    if active_gdf is not None:
-        m.add_gdf(active_gdf, layer_name="Site Boundary")
-    
-    timestamp = st.session_state.time_list[idx]
-    if timestamp in st.session_state.raster_cache:
-        # vmin/vmax handles the 'not showing' issue by forcing color stretch
-        m.add_raster(st.session_state.raster_cache[timestamp], 
-                     colormap="jet", opacity=0.7, vmin=0.1, vmax=2.5)
-    
+    if st.session_state.active_gdf is not None:
+        m.add_gdf(st.session_state.active_gdf, layer_name="Site Boundary")
+    if idx is not None and st.session_state.time_list:
+        ts = st.session_state.time_list[idx]
+        if ts in st.session_state.raster_cache:
+            m.add_raster(st.session_state.raster_cache[ts], colormap="jet", opacity=0.7, vmin=0.1, vmax=2.5)
     with map_placeholder:
         m.to_streamlit()
 
-if st.session_state.time_list:
+if not st.session_state.time_list:
+    render_map()
+else:
     c_p, c_s = st.columns([1, 6])
-    
-    # Play/Stop Button logic
     if st.session_state.playing:
         if c_p.button("⏹️ Stop"):
             st.session_state.playing = False
@@ -156,7 +151,6 @@ if st.session_state.time_list:
             st.session_state.playing = True
             st.rerun()
 
-    # Slider
     st.session_state.current_idx = c_s.select_slider(
         "Time Selection",
         options=range(len(st.session_state.time_list)),
@@ -166,19 +160,18 @@ if st.session_state.time_list:
     )
 
     if st.session_state.playing:
-        # Play loop
         for i in range(st.session_state.current_idx, len(st.session_state.time_list)):
             st.session_state.current_idx = i
-            render_frame(i)
+            render_map(i)
             time.sleep(0.5)
             if not st.session_state.playing: break
         st.session_state.playing = False
         st.rerun()
     else:
-        render_frame(st.session_state.current_idx)
+        render_map(st.session_state.current_idx)
 
 # --- 6. CHART ---
 if st.session_state.processed_df is not None:
     st.plotly_chart(px.bar(st.session_state.processed_df.reset_index(), x="time", y="rain_in", 
-                           title=f"Rainfall Trend ({st.session_state.shp_name})", 
+                           title=f"Rainfall Profile: {st.session_state.shp_name}", 
                            template="plotly_dark"), use_container_width=True)
