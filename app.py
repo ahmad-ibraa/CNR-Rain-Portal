@@ -14,32 +14,32 @@ from datetime import datetime, timedelta
 import leafmap.foliumap as leafmap
 import plotly.express as px
 
-# --- 1. PAGE CONFIG & STYLING ---
+# --- 1. PAGE CONFIG ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
 
 st.markdown("""
     <style>
         .block-container { padding: 1rem !important; }
-        /* Keep map large but leave room for the play slider */
-        iframe { height: 70vh !important; width: 100% !important; }
+        iframe { height: 75vh !important; width: 100% !important; }
         [data-testid="stSidebarCollapsedControl"] { display: flex !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SESSION STATE (The "No-Reset" Brain) ---
+# --- 2. SESSION STATE & TIME CONSTRAINTS ---
+# We define "Now" and "Max Available Time" (1 hour ago)
+now = datetime.now()
+max_allowed_dt = now - timedelta(hours=1)
+
 if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'raster_cache' not in st.session_state: st.session_state.raster_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
 if 'shp_name' not in st.session_state: st.session_state.shp_name = "output"
-# Persistent map state
 if 'map_center' not in st.session_state: st.session_state.map_center = [40.1, -74.5]
 if 'map_zoom' not in st.session_state: st.session_state.map_zoom = 7
-# Persistent date state
-if 'start_d' not in st.session_state: st.session_state.start_d = datetime(2026, 2, 9)
-if 'end_d' not in st.session_state: st.session_state.end_d = datetime(2026, 2, 10)
 
 # --- 3. DOWNLOADER ---
 def download_s3_grib(dt_local):
+    # Standard UTC conversion
     edt_s = datetime(dt_local.year, 3, 8 + (6 - datetime(dt_local.year, 3, 1).weekday()) % 7)
     edt_e = datetime(dt_local.year, 11, 1 + (6 - datetime(dt_local.year, 11, 1).weekday()) % 7)
     offset = 4 if edt_s <= dt_local < edt_e else 5
@@ -57,7 +57,6 @@ def download_s3_grib(dt_local):
             with xr.open_dataset(tmp, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
                 da = ds[list(ds.data_vars)[0]].load()
                 da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
-                # Remove zero-rain pixels for better map transparency
                 da = da.where(da > 0.1) 
                 return da.rio.write_crs("EPSG:4326")
     except: return None
@@ -69,9 +68,9 @@ def download_s3_grib(dt_local):
 with st.sidebar:
     st.title("🛰️ CNR Portal")
     
-    # Use key= to link to session state so they don't reset
-    st.date_input("Start Date", key="start_d")
-    st.date_input("End Date", key="end_d")
+    # Restrict Date Inputs: Max date is Today
+    start_d = st.date_input("Start Date", value=max_allowed_dt - timedelta(days=1), max_value=max_allowed_dt.date())
+    end_d = st.date_input("End Date", value=max_allowed_dt.date(), max_value=max_allowed_dt.date())
     
     up_zip = st.file_uploader("Upload ZIP Shapefile", type="zip")
     active_gdf = None
@@ -86,26 +85,29 @@ with st.sidebar:
     if st.button("🚀 Process Data", use_container_width=True):
         if active_gdf is not None:
             with st.spinner("Fetching CONUS Radar..."):
-                tr = pd.date_range(st.session_state.start_d, st.session_state.end_d, freq='1H') # Hourly for speed, change to 15min as needed
-                rc, sl = {}, []
-                pb = st.progress(0)
-                for i, ts in enumerate(tr):
-                    da = download_s3_grib(ts)
-                    if da is not None:
-                        tf = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
-                        da.rio.to_raster(tf)
-                        # The key in rc must be the label for the slider
-                        rc[ts.strftime("%Y-%m-%d %H:%M")] = tf
-                        # Calculate statistics (Clipped)
-                        clipped = da.rio.clip(active_gdf.geometry, active_gdf.crs, all_touched=True)
-                        sl.append({"time": ts, "rain_in": float(clipped.mean())/25.4})
-                    pb.progress((i+1)/len(tr))
-                st.session_state.processed_df = pd.DataFrame(sl).set_index("time")
-                st.session_state.raster_cache = rc
-                st.session_state.time_list = list(rc.keys())
+                # Define full range then filter out anything >= max_allowed_dt
+                full_tr = pd.date_range(start_d, end_d, freq='1H')
+                tr = [t for t in full_tr if t < max_allowed_dt]
+                
+                if not tr:
+                    st.error("Selected range is too recent. Please select times at least 1 hour ago.")
+                else:
+                    rc, sl = {}, []
+                    pb = st.progress(0)
+                    for i, ts in enumerate(tr):
+                        da = download_s3_grib(ts)
+                        if da is not None:
+                            tf = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
+                            da.rio.to_raster(tf)
+                            rc[ts.strftime("%Y-%m-%d %H:%M")] = tf
+                            clipped = da.rio.clip(active_gdf.geometry, active_gdf.crs, all_touched=True)
+                            sl.append({"time": ts, "rain_in": float(clipped.mean())/25.4})
+                        pb.progress((i+1)/len(tr))
+                    st.session_state.processed_df = pd.DataFrame(sl).set_index("time")
+                    st.session_state.raster_cache = rc
+                    st.session_state.time_list = list(rc.keys())
         else: st.warning("Upload ZIP first")
 
-    # --- OUTPUT FILES FIELD ---
     if st.session_state.processed_df is not None:
         st.subheader("📁 Output Files")
         fname = f"rainfall_{st.session_state.shp_name}.csv"
@@ -115,32 +117,22 @@ with st.sidebar:
 
 # --- 5. MAIN CONTENT ---
 
-# Initialize Map with persistent coordinates
+# Initialize Map
 m = leafmap.Map(center=st.session_state.map_center, zoom=st.session_state.map_zoom)
 
 if active_gdf is not None:
     m.add_gdf(active_gdf, layer_name="Site Boundary")
 
-# CONUS TIME SLIDER WITH PLAY BUTTON
+# TIME SELECTION / PLAYBACK (Now integrated into the map)
 if st.session_state.time_list:
-    # This adds the playback controls automatically
     m.add_time_slider(
         st.session_state.raster_cache, 
         labels=st.session_state.time_list,
-        time_interval=400 # 0.4 seconds per frame
+        time_interval=400
     )
 
 # Render Map
-# FIX: Catch the error where map_data becomes a DeltaGenerator
-map_output = m.to_streamlit()
-
-# This part needs to be handled carefully depending on leafmap version
-try:
-    if isinstance(map_output, dict) and 'center' in map_output:
-        st.session_state.map_center = [map_output['center']['lat'], map_output['center']['lng']]
-        st.session_state.map_zoom = map_output['zoom']
-except:
-    pass # If version doesn't support return dict, skip persistence to avoid crash
+m.to_streamlit()
 
 # --- 6. CHART ---
 if st.session_state.processed_df is not None:
