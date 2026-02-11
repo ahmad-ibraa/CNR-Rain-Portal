@@ -294,8 +294,7 @@ MUNI_NAME_FIELD = "GNIS_NAME"
 def render_muni_picker_map(muni_geojson: dict, center=(40.1, -74.6), zoom=8):
     m = folium.Map(location=center, zoom_start=zoom, tiles="CartoDB dark_matter")
 
-    # Base municipalities layer (clickable)
-    muni_layer = folium.GeoJson(
+    folium.GeoJson(
         muni_geojson,
         name="NJ Municipalities",
         style_function=lambda feat: {
@@ -310,30 +309,21 @@ def render_muni_picker_map(muni_geojson: dict, center=(40.1, -74.6), zoom=8):
             "fillOpacity": 0.10,
         },
         tooltip=GeoJsonTooltip(fields=[MUNI_NAME_FIELD], aliases=["Municipality:"]),
-    )
-    muni_layer.add_to(m)
+    ).add_to(m)
 
     folium.LayerControl(collapsed=True).add_to(m)
 
-    # Render to Streamlit and capture click
     out = st_folium(m, width=None, height=950, returned_objects=["last_clicked"])
     clicked = out.get("last_clicked")
-    if clicked:
-        props = clicked.get("properties", {})
-        name = props.get(MUNI_NAME_FIELD)
 
-
-    # Streamlit-Folium click capture: usually geometry is returned under last_active_drawing,
-    # and properties are accessible depending on version/build.
-    lad = out.get("last_active_drawing")
-    if lad and isinstance(lad, dict):
-        props = lad.get("properties") or {}
+    if clicked and isinstance(clicked, dict):
+        props = clicked.get("properties", {}) or {}
         name = props.get(MUNI_NAME_FIELD)
 
         if name and name not in st.session_state.selected_munis:
             st.session_state.selected_munis.append(name)
-            st.session_state.active_gdf
             st.rerun()
+
 
 def load_munis_geojson(path: str) -> dict:
     # Load raw GeoJSON as dict (folium uses it directly)
@@ -787,3 +777,4 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
