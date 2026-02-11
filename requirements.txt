@@ -1,0 +1,11 @@
+streamlit
+pandas
+geopandas
+xarray
+cfgrib
+rioxarray
+requests
+leafmap
+plotly
+eccodes
+rasterio
