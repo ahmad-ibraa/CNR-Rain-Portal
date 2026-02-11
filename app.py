@@ -14,10 +14,27 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# --- 1. PAGE CONFIG ---
+# --- 1. PAGE CONFIG & RESPONSIVE CSS ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
 
-# --- 2. SESSION STATE INITIALIZATION ---
+# Force the map to fill the vertical space of the browser
+st.markdown("""
+    <style>
+        /* Remove extra padding around the app */
+        .block-container { padding: 1rem !important; }
+        
+        /* Force Pydeck to occupy 75% of the screen height */
+        [data-testid="stPydeckChart"] {
+            height: 75vh !important;
+            min-height: 500px;
+        }
+        
+        /* Make the sidebar a bit cleaner */
+        section[data-testid="stSidebar"] { width: 350px !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. SESSION STATE ---
 if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'map_data_cache' not in st.session_state: st.session_state.map_data_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
@@ -40,6 +57,7 @@ def get_mrms_points(dt_utc):
             
         with xr.open_dataset(tmp_path, engine="cfgrib") as ds:
             da = ds[list(ds.data_vars)[0]].load()
+            # Projection: 0-360 to -180-180
             da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
             da = da.rio.write_crs("EPSG:4326")
 
@@ -48,8 +66,8 @@ def get_mrms_points(dt_utc):
                 clipped = da.rio.clip(st.session_state.active_gdf.geometry, "EPSG:4326")
                 site_mean = float(clipped.mean()) if not clipped.isnull().all() else 0.0
 
-            # Subset to regional area for performance
-            subset = da.sel(latitude=slice(43, 37), longitude=slice(-78, -70))
+            # Local focus subset
+            subset = da.sel(latitude=slice(43, 38), longitude=slice(-77, -71))
             df = subset.to_dataframe(name='val').reset_index()
             df = df[df['val'] > 0.1] 
             return df[['latitude', 'longitude', 'val']], max(0.0, site_mean/25.4)
@@ -62,6 +80,7 @@ with st.sidebar:
     st.title("🛰️ CNR GIS Portal")
     tz_mode = st.radio("Timezone", ["Local (EST/EDT)", "UTC"])
     yesterday = datetime.now() - timedelta(days=1)
+    
     start_d = st.date_input("Start Date", value=yesterday.date())
     end_d = st.date_input("End Date", value=yesterday.date())
     
@@ -98,44 +117,50 @@ with st.sidebar:
         else: st.warning("Upload Shapefile First")
 
 # --- 5. MAIN CONTENT (MAP) ---
-st.subheader("Radar GIS Viewer")
 map_spot = st.empty()
 
 def render_deck(idx=0):
     layers = []
-    # Base view setup
-    lat, lon, zoom = 40.1, -74.5, 7
+    lat, lon, zoom = 40.7, -74.0, 8
+    
     if st.session_state.active_gdf is not None:
         b = st.session_state.active_gdf.total_bounds
-        lat, lon, zoom = (b[1]+b[3])/2, (b[0]+b[2])/2, 10
+        lat, lon, zoom = (b[1]+b[3])/2, (b[0]+b[2])/2, 11
         layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
-                                 stroked=True, filled=False, get_line_color=[255,255,255], line_width_min_pixels=2))
+                                stroked=True, filled=True, get_fill_color=[255, 255, 255, 40],
+                                get_line_color=[255, 255, 255], line_width_min_pixels=2))
 
     if st.session_state.time_list and idx < len(st.session_state.time_list):
         df = st.session_state.map_data_cache[st.session_state.time_list[idx]]
-        layers.append(pdk.Layer("ScreenGridLayer", df, get_position=["longitude", "latitude"], 
-                                 get_weight="val", cell_size_pixels=10, 
-                                 color_range=[[0,255,255,140],[0,0,255,180],[255,0,0,220]]))
+        if not df.empty:
+            layers.append(pdk.Layer("ScreenGridLayer", df, get_position=["longitude", "latitude"], 
+                                    get_weight="val", cell_size_pixels=12, 
+                                    color_range=[[0,255,255,100],[0,0,255,180],[255,0,0,230]]))
 
     with map_spot:
-        st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom),
-                                 map_style="mapbox://styles/mapbox/satellite-v9"))
+        # Note: height=None here allows the CSS (vh) to control the display
+        st.pydeck_chart(pdk.Deck(
+            layers=layers,
+            initial_view_state=pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom),
+            map_style="light" 
+        ))
 
-# Animation Controls
+# Controls
 if st.session_state.time_list:
     cp, cs = st.columns([1, 5])
     if cp.button("⏹️ Stop" if st.session_state.playing else "▶️ Play"):
         st.session_state.playing = not st.session_state.playing
         st.rerun()
     
-    st.session_state.current_idx = cs.select_slider("Time", options=range(len(st.session_state.time_list)), 
+    st.session_state.current_idx = cs.select_slider("Time Selection", 
+                                                   options=range(len(st.session_state.time_list)), 
                                                    format_func=lambda x: st.session_state.time_list[x])
     
     if st.session_state.playing:
         for i in range(st.session_state.current_idx, len(st.session_state.time_list)):
             st.session_state.current_idx = i
             render_deck(i)
-            time.sleep(0.3)
+            time.sleep(0.4)
             if not st.session_state.playing: break
         st.session_state.playing = False
         st.rerun()
@@ -144,7 +169,9 @@ if st.session_state.time_list:
 else:
     render_deck()
 
-# --- 6. CHART SAFETY ---
+# --- 6. CHART ---
 if st.session_state.processed_df is not None and not st.session_state.processed_df.empty:
     import plotly.express as px
-    st.plotly_chart(px.bar(st.session_state.processed_df, x='time', y='rain_in', template="plotly_dark"), use_container_width=True)
+    st.plotly_chart(px.bar(st.session_state.processed_df, x='time', y='rain_in', 
+                           template="plotly_dark", color_discrete_sequence=['#00CCFF']), 
+                           use_container_width=True)
