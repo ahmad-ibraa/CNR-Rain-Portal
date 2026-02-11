@@ -17,8 +17,6 @@ from matplotlib.colors import ListedColormap
 import rioxarray
 import time
 import base64
-
-# ---- robust timezone handling (no manual DST math) ----
 from zoneinfo import ZoneInfo
 
 NY_TZ  = ZoneInfo("America/New_York")
@@ -31,9 +29,6 @@ st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar
 
 # =============================
 # 2) CSS
-#   - keep deckgl fullscreen
-#   - ensure controls sit ABOVE deckgl
-#   - DO NOT use :has()
 # =============================
 st.markdown(
     """
@@ -111,10 +106,10 @@ canvas.mapboxgl-canvas{
   height:100% !important;
 }
 
-/* --- Floating control bar --- */
+/* Floating control bar */
 .control-bar{
   position: fixed !important;
-  left: 420px !important;   /* sidebar 400 + 20 */
+  left: 420px !important;
   right: 18px !important;
   bottom: 18px !important;
   z-index: 12000 !important;
@@ -125,9 +120,7 @@ canvas.mapboxgl-canvas{
   border: 1px solid rgba(255,255,255,0.12) !important;
   backdrop-filter: blur(10px);
 }
-.control-bar *{
-  pointer-events: auto !important;
-}
+.control-bar *{ pointer-events: auto !important; }
 .control-bar .stButton button{
   border-radius:999px !important;
   width:44px !important;
@@ -161,13 +154,12 @@ canvas.mapboxgl-canvas{
 if "radar_cache" not in st.session_state: st.session_state.radar_cache = {}
 if "time_list" not in st.session_state: st.session_state.time_list = []
 if "active_gdf" not in st.session_state: st.session_state.active_gdf = None
-if "basin_vault" not in st.session_state: st.session_state.basin_vault = {}  # basin_name -> df
+if "basin_vault" not in st.session_state: st.session_state.basin_vault = {}
 if "map_view" not in st.session_state: st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 if "img_dir" not in st.session_state: st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
 if "is_playing" not in st.session_state: st.session_state.is_playing = False
 if "current_time_index" not in st.session_state: st.session_state.current_time_index = 0
 if "processing_msg" not in st.session_state: st.session_state.processing_msg = ""
-if "ws_bounds" not in st.session_state: st.session_state.ws_bounds = None
 
 RADAR_COLORS = ["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"]
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
@@ -191,17 +183,96 @@ def normalize_grid(da: xr.DataArray) -> xr.DataArray:
     keep = {"latitude", "longitude"}
     drop = [c for c in da.coords if c not in keep]
     da = da.drop_vars(drop, errors="ignore")
-
     for d in list(da.dims):
         if d not in ("latitude", "longitude"):
             da = da.squeeze(d, drop=True)
 
-    # consistent ordering
+    # Ensure coords are 1D and sorted
     da = da.sortby("latitude", ascending=False).sortby("longitude")
     return da
 
+def ensure_unique_sorted_1d(coord: np.ndarray, descending: bool = False) -> np.ndarray:
+    """
+    Make coordinate 1D, unique, monotonic.
+    If duplicates exist, keep first occurrence after sorting.
+    """
+    coord = np.asarray(coord).astype("float64")
+    order = np.argsort(coord)
+    coord_sorted = coord[order]
+    if descending:
+        coord_sorted = coord_sorted[::-1]
+
+    # unique while preserving sorted order
+    _, uniq_idx = np.unique(coord_sorted, return_index=True)
+    coord_uniq = coord_sorted[np.sort(uniq_idx)]
+    return coord_uniq
+
+def nearest_index(src: np.ndarray, tgt: np.ndarray) -> np.ndarray:
+    """
+    Return indices into src for nearest neighbor of each tgt value.
+    src must be sorted ascending or descending; we handle both.
+    """
+    src = np.asarray(src).astype("float64")
+    tgt = np.asarray(tgt).astype("float64")
+
+    # if descending, flip for searchsorted then map back
+    descending = src[0] > src[-1]
+    if descending:
+        src_work = src[::-1]
+    else:
+        src_work = src
+
+    pos = np.searchsorted(src_work, tgt)
+    pos = np.clip(pos, 1, len(src_work) - 1)
+    left = src_work[pos - 1]
+    right = src_work[pos]
+    choose_right = (np.abs(tgt - right) < np.abs(tgt - left))
+    idx = pos - 1 + choose_right.astype(int)
+
+    if descending:
+        idx = (len(src) - 1) - idx
+    return idx
+
+def align_ro_to_mrms_grid_nearest(ro: xr.DataArray, mrms0: xr.DataArray) -> xr.DataArray:
+    """
+    Robust grid alignment without interp_like:
+    - nearest-neighbor index mapping for lat/lon
+    - preserves time dimension of RO
+    """
+    ro = normalize_grid(ro)
+    mrms0 = normalize_grid(mrms0)
+
+    ro_lat = np.asarray(ro.latitude.values, dtype="float64")
+    ro_lon = np.asarray(ro.longitude.values, dtype="float64")
+    mr_lat = np.asarray(mrms0.latitude.values, dtype="float64")
+    mr_lon = np.asarray(mrms0.longitude.values, dtype="float64")
+
+    # Ensure monotonic unique coords (defensive)
+    # We do NOT resample ro here; we just index-map to MRMS coords.
+    lat_idx = nearest_index(ro_lat, mr_lat)
+    lon_idx = nearest_index(ro_lon, mr_lon)
+
+    # advanced indexing -> returns (time, mr_lat, mr_lon)
+    data = ro.values.astype("float32")  # (time, lat, lon) expected
+    if ro.ndim != 3 or ro.dims[0] != "time":
+        # Ensure we have a time dimension first
+        raise ValueError(f"RO must be (time, latitude, longitude). Got dims={ro.dims}")
+
+    aligned = data[:, lat_idx[:, None], lon_idx[None, :]]
+
+    out = xr.DataArray(
+        aligned,
+        dims=("time", "latitude", "longitude"),
+        coords={
+            "time": ro.time.values,
+            "latitude": mr_lat,
+            "longitude": mr_lon,
+        },
+        name=getattr(ro, "name", "ro_aligned"),
+    )
+    return out
+
 def local_naive_to_utc(dt_local_naive: datetime) -> datetime:
-    """NY local naive -> UTC naive, correct DST via zoneinfo."""
     aware_local = dt_local_naive.replace(tzinfo=NY_TZ)
     aware_utc = aware_local.astimezone(UTC_TZ)
     return aware_utc.replace(tzinfo=None)
@@ -211,10 +282,6 @@ def ceil_to_hour(dt: datetime) -> datetime:
     return dt0 if dt == dt0 else (dt0 + timedelta(hours=1))
 
 def load_precip(file_type: str, dt_local_naive: datetime) -> xr.DataArray | None:
-    """
-    dt_local_naive: local NY time (naive) representing the product timestamp/end time.
-    NOAA MRMS S3 naming is UTC.
-    """
     dt_utc = local_naive_to_utc(dt_local_naive)
     ts = dt_utc.strftime("%Y%m%d-%H%M00")
     ymd = dt_utc.strftime("%Y%m%d")
@@ -260,6 +327,7 @@ def drop_time_coord(da: xr.DataArray) -> xr.DataArray:
 def save_frame_png(da: xr.DataArray, dt_local_naive: datetime) -> tuple[str, list]:
     data = da.values.astype("float32")
     data[data < 0.1] = np.nan
+
     img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_local_naive.strftime('%Y%m%d_%H%M')}.png")
     plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
 
@@ -272,12 +340,11 @@ def save_frame_png(da: xr.DataArray, dt_local_naive: datetime) -> tuple[str, lis
     return img_path, bounds
 
 def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> float:
-    """Compute mean over watershed, but do NOT affect displayed raster."""
+    """Stats only; display stays uncut."""
     if ws_gdf is None:
         return float(da_full.mean().values) / 25.4
-
-    sub = da_full.rio.write_crs("EPSG:4326", inplace=False)
     try:
+        sub = da_full.rio.write_crs("EPSG:4326", inplace=False)
         clipped = sub.rio.clip(ws_gdf.geometry, ws_gdf.crs, drop=True)
         if clipped.size == 0:
             return float(da_full.mean().values) / 25.4
@@ -299,7 +366,7 @@ with st.sidebar:
     s_time = c1.selectbox("Start Time", hours, index=19)
     e_time = c2.selectbox("End Time", hours, index=21)
 
-    up_zip = st.file_uploader("Watershed Boundary (ZIP)", type="zip")
+    up_zip = st.file_uploader("Watershed Boundary (ZIP) (outline + stats only)", type="zip")
     basin_name = "Default_Basin"
 
     if up_zip:
@@ -311,7 +378,6 @@ with st.sidebar:
             if shps:
                 st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
                 b = st.session_state.active_gdf.total_bounds
-                st.session_state.ws_bounds = b  # only for zoom framing if you want
                 st.session_state.map_view = pdk.ViewState(
                     latitude=(b[1] + b[3]) / 2,
                     longitude=(b[0] + b[2]) / 2,
@@ -330,7 +396,7 @@ with st.sidebar:
             start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
             end_dt   = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
 
-            # alignment (your rule)
+            # alignment rule
             ro_start   = start_dt + timedelta(minutes=15)
             ro_end     = end_dt
             mrms_start = ceil_to_hour(start_dt + timedelta(minutes=45))
@@ -341,15 +407,14 @@ with st.sidebar:
 
             pb = st.progress(0.0)
             msg = st.empty()
-
-            total_steps = max(1, len(ro_times) + len(mrms_times) + 30)
+            total_steps = max(1, len(ro_times) + len(mrms_times) + 40)
             step_i = 0
 
-            # ---------- 1) Download RO (NO CLIP) ----------
+            # 1) Download RO (NO CLIP)
             ro_list, ro_kept = [], []
             for i, t in enumerate(ro_times):
                 msg.info(f"RadarOnly 15-min → {i+1}/{len(ro_times)} • {t:%Y-%m-%d %H:%M} (NY local)")
-                da = load_precip("RO", t)
+                da = load_precip("RO", pd.Timestamp(t).to_pydatetime())
                 step_i += 1; pb.progress(min(1.0, step_i/total_steps))
                 if da is None:
                     continue
@@ -361,11 +426,11 @@ with st.sidebar:
 
             ro = xr.concat(ro_list, dim="time").assign_coords(time=ro_kept)
 
-            # ---------- 2) Download MRMS (NO CLIP) ----------
+            # 2) Download MRMS (NO CLIP)
             mrms_list, mrms_kept = [], []
             for j, t in enumerate(mrms_times):
                 msg.info(f"MRMS 1-hr → {j+1}/{len(mrms_times)} • {t:%Y-%m-%d %H:%M} (NY local)")
-                da = load_precip("MRMS", t)
+                da = load_precip("MRMS", pd.Timestamp(t).to_pydatetime())
                 step_i += 1; pb.progress(min(1.0, step_i/total_steps))
                 if da is None:
                     continue
@@ -377,14 +442,12 @@ with st.sidebar:
 
             mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
 
-            # ---------- 3) Force RO grid to match MRMS grid (spatial only) ----------
+            # 3) Align RO grid to MRMS grid (ROBUST nearest index mapping)
             msg.info("Aligning RO grid to MRMS grid…")
-            ro = ro.interp_like(mrms.isel(time=0), method="nearest")
-            ro = ro.astype("float32")
-            mrms = mrms.astype("float32")
-            step_i += 3; pb.progress(min(1.0, step_i/total_steps))
+            ro = align_ro_to_mrms_grid_nearest(ro, mrms.isel(time=0))
+            step_i += 5; pb.progress(min(1.0, step_i/total_steps))
 
-            # ---------- 4) RO hourly sums aligned to MRMS (require 4 frames) ----------
+            # 4) RO hourly sums aligned to MRMS (must have 4 frames)
             msg.info("Computing RO hourly sums aligned to MRMS…")
             ro_hourly, valid_times = [], []
             for T in mrms.time.values:
@@ -400,15 +463,15 @@ with st.sidebar:
 
             mrms = mrms.sel(time=pd.to_datetime(valid_times))
             ro_hourly_da = xr.concat(ro_hourly, dim="time").assign_coords(time=pd.to_datetime(valid_times))
-            step_i += 5; pb.progress(min(1.0, step_i/total_steps))
+            step_i += 6; pb.progress(min(1.0, step_i/total_steps))
 
-            # ---------- 5) Scaling rasters (MRMS / RO_hourly) ----------
+            # 5) scaling rasters (MRMS / RO_hourly)
             msg.info("Computing hourly scaling rasters (MRMS / RO_hourly)…")
-            eps = 0.01  # mm
+            eps = 0.01
             ratio_list = []
             for i in range(len(mrms.time)):
-                mrms_slice = mrms.isel(time=i)
-                ro_slice   = ro_hourly_da.isel(time=i).interp_like(mrms_slice, method="nearest")
+                mrms_slice = drop_time_coord(mrms.isel(time=i))
+                ro_slice   = drop_time_coord(ro_hourly_da.isel(time=i))
 
                 ratio = xr.where(ro_slice > eps, mrms_slice / ro_slice, 0.0)
                 ratio = ratio.where(np.isfinite(ratio), 0.0)
@@ -416,9 +479,9 @@ with st.sidebar:
                 ratio_list.append(ratio)
 
             scaling_da = xr.concat(ratio_list, dim="time").assign_coords(time=mrms.time.values)
-            step_i += 8; pb.progress(min(1.0, step_i/total_steps))
+            step_i += 6; pb.progress(min(1.0, step_i/total_steps))
 
-            # ---------- 6) Scale each RO 15-min frame using the hour-end bin ----------
+            # 6) scale 15-min RO frames by the correct MRMS hour-end bin
             msg.info("Applying hourly scaling to 15-min RO frames…")
             mrms_ends = [pd.to_datetime(str(x)).to_pydatetime() for x in mrms.time.values]
 
@@ -446,22 +509,19 @@ with st.sidebar:
                 raise RuntimeError("Scaling produced zero frames (check overlap/time alignment).")
 
             ro_scaled_da = xr.concat(ro_scaled_list, dim="time").assign_coords(time=ro_scaled_times)
-            step_i += 8; pb.progress(min(1.0, step_i/total_steps))
+            step_i += 10; pb.progress(min(1.0, step_i/total_steps))
 
-            # ---------- 7) Render frames for playback (NO CLIP) ----------
-            msg.info("Rendering map frames for playback…")
+            # 7) render frames (NO CLIP)
+            msg.info("Rendering map frames…")
             cache, stats = {}, []
-
             for i, tdt in enumerate(ro_scaled_da.time.values):
                 dt_local = pd.to_datetime(str(tdt)).to_pydatetime()
                 da = ro_scaled_da.sel(time=dt_local)
 
-                # Stats can use watershed clip (optional), but display is full raster
                 mean_in = watershed_mean_inch(da, st.session_state.active_gdf)
-
                 img_path, bounds = save_frame_png(da, dt_local)
 
-                label = dt_local.strftime("%Y-%m-%d %H:%M")  # NY local label
+                label = dt_local.strftime("%Y-%m-%d %H:%M")
                 cache[label] = {"path": img_path, "bounds": bounds}
                 stats.append({"time": dt_local, "rain_in": mean_in})
 
@@ -483,7 +543,6 @@ with st.sidebar:
             st.exception(e)
             st.stop()
 
-    # outputs list
     if st.session_state.basin_vault:
         st.divider()
         st.subheader("Outputs")
@@ -507,7 +566,6 @@ if st.session_state.time_list:
     curr = st.session_state.radar_cache[key]
     layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
 
-# Watershed outline only (no clipping)
 if st.session_state.active_gdf is not None:
     layers.append(
         pdk.Layer(
@@ -528,8 +586,7 @@ deck = pdk.Deck(
 st.pydeck_chart(deck, use_container_width=True, height=1000)
 
 # =============================
-# 8) CONTROLS (ALWAYS ABOVE MAP)
-#   - we wrap in a div with class control-bar that CSS can target
+# 8) CONTROLS
 # =============================
 if st.session_state.time_list:
     st.markdown('<div class="control-bar">', unsafe_allow_html=True)
