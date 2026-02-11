@@ -23,102 +23,127 @@ import time
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar_state="expanded")
 
 # -----------------------------
-# 2. PRECISION CSS OVERRIDE
+# 2. COMPLETE CSS FIX - NO TOP OFFSET
 # -----------------------------
 st.markdown("""
 <style>
-    /* 1. ELIMINATE ALL OFFSETS (Top, Bottom, Right) */
-    [data-testid="stHeader"], [data-testid="stToolbar"] {
-        display: none !important;
-    }
+/* --- GLOBAL: no scroll, no padding --- */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+    height: 100vh !important;
+    width: 100vw !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
 
-    [data-testid="stAppViewContainer"] {
-        height: 100vh !important;
-        width: 100vw !important;
-        overflow: hidden !important;
-    }
+/* Main area must not add padding */
+.main .block-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100vw !important;
+}
 
-    /* Target the main block to be exactly at 0,0 */
-    .main .block-container {
-        padding: 0 !important;
-        margin: 0 !important;
-        max-width: 100% !important;
-        height: 100vh !important;
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-    }
+/* Hide streamlit chrome */
+header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] {
+    display: none !important;
+    height: 0 !important;
+    visibility: hidden !important;
+}
 
-    /* Ensure the Map fills the viewport perfectly */
-    .stPydeckChart {
-        height: 100vh !important;
-        width: 100vw !important;
-        margin: 0 !important;
-    }
+/* --- SIDEBAR: fixed width, not resizable, not collapsible --- */
+[data-testid="stSidebar"] {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    height: 100vh !important;
 
-    /* 2. SIDEBAR COMPRESSION (Fixes the 'Scroll Down' issue) */
-    [data-testid="stSidebar"] {
-        min-width: 400px !important;
-        max-width: 400px !important;
-        width: 400px !important;
-        z-index: 100 !important;
-    }
+    min-width: 400px !important;
+    max-width: 400px !important;
+    width: 400px !important;
 
-    /* Reduce vertical padding inside sidebar elements */
-    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-        gap: 0.5rem !important;
-        padding-top: 2rem !important;
-    }
+    background: rgba(17,17,17,0.95) !important;
+    backdrop-filter: blur(10px);
+    border-right: 1px solid rgba(255,255,255,0.08);
+    z-index: 1000 !important;
+}
 
-    /* Make the file uploader smaller so it doesn't push buttons down */
-    [data-testid="stFileUploader"] {
-        padding-bottom: 0 !important;
-    }
-    
-    /* Disable sidebar resizing and hiding */
-    [data-testid="stSidebarResizer"], button[title="Collapse sidebar"], [data-testid="collapsedControl"] {
-        display: none !important;
-    }
+/* Remove resizer + collapse button */
+[data-testid="stSidebarResizer"],
+[data-testid="collapsedControl"],
+button[title="Collapse sidebar"] {
+    display: none !important;
+}
 
-    /* 3. FLOATING PLAYER CONTROLS (Anchored at bottom) */
-    /* Target the container holding our slider and buttons */
-    div[data-testid="stVerticalBlock"] > div:last-child {
-        position: fixed !important;
-        bottom: 30px !important;
-        left: 430px !important;
-        right: 30px !important;
-        z-index: 1000 !important;
-        background: rgba(15, 15, 15, 0.9) !important;
-        padding: 10px 30px !important;
-        border-radius: 50px !important;
-        border: 1px solid #444;
-        backdrop-filter: blur(8px);
-    }
+/* Sidebar internal padding/gap fixes (THIS removes the “big empty space”) */
+[data-testid="stSidebar"] > div {
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.35rem !important;   /* reduce vertical gaps between widgets */
+}
+[data-testid="stSidebar"] .block-container {
+    padding: 0 14px !important; /* reduce left/right padding */
+}
 
-    /* Make only playback buttons circular */
-    div[data-testid="column"] .stButton button {
-        border-radius: 50% !important;
-        width: 45px !important;
-        height: 45px !important;
-        padding: 0 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-    }
+/* Keep sidebar content scrollable if it ever overflows */
+[data-testid="stSidebarContent"] {
+    height: 100vh !important;
+    overflow: auto !important;
+}
 
-    /* Sidebar buttons (Process/Download) stay normal */
-    [data-testid="stSidebar"] .stButton button {
-        border-radius: 4px !important;
-        width: 100% !important;
-        height: auto !important;
-    }
+/* --- MAP: truly edge-to-edge, behind sidebar --- */
+/* Make pydeck wrapper fixed fullscreen */
+.stPydeckChart, .stPydeckChart > div {
+    position: fixed !important;
+    inset: 0 !important;        /* top/right/bottom/left = 0 */
+    height: 100vh !important;
+    width: 100vw !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    z-index: 0 !important;
+}
 
-    footer { visibility: hidden !important; }
+/* Target the actual pydeck iframe */
+iframe[title="pydeck.io"],
+iframe[title="streamlit_pydeck.pydeck_chart"] {
+    position: fixed !important;
+    inset: 0 !important;
+    height: 100vh !important;
+    width: 100vw !important;
+    border: 0 !important;
+    z-index: 0 !important;
+}
+
+/* --- FLOATING CONTROLS AT BOTTOM (your play/slider row) --- */
+.controls-float {
+    position: fixed !important;
+    bottom: 18px !important;
+    left: 420px !important;   /* sidebar (400) + padding */
+    right: 18px !important;
+    z-index: 1200 !important;
+
+    background: rgba(15, 15, 15, 0.92) !important;
+    padding: 12px 20px !important;
+    border-radius: 999px !important;
+    border: 1px solid rgba(255,255,255,0.12);
+    backdrop-filter: blur(10px);
+}
+
+/* Make your play button circular */
+.controls-float .stButton button {
+    border-radius: 999px !important;
+    width: 44px !important;
+    height: 44px !important;
+    padding: 0 !important;
+    font-size: 18px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
+
 # -----------------------------
-# 3. STATE & DATA ENGINE
+# 3. STATE MANAGEMENT
 # -----------------------------
 if 'radar_cache' not in st.session_state: st.session_state.radar_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
@@ -128,12 +153,17 @@ if 'map_view' not in st.session_state:
     st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 if "img_dir" not in st.session_state:
     st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
-if 'is_playing' not in st.session_state: st.session_state.is_playing = False
-if 'current_time_index' not in st.session_state: st.session_state.current_time_index = 0
+if 'is_playing' not in st.session_state:
+    st.session_state.is_playing = False
+if 'current_time_index' not in st.session_state:
+    st.session_state.current_time_index = 0
 
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
+# -----------------------------
+# 4. RADAR ENGINE
+# -----------------------------
 def get_radar_image(dt_utc):
     ts_str = dt_utc.strftime("%Y%m%d-%H%M00")
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
@@ -167,23 +197,23 @@ def get_radar_image(dt_utc):
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
 # -----------------------------
-# 4. SIDEBAR (COMPACTED)
+# 5. SIDEBAR
 # -----------------------------
 with st.sidebar:
     st.title("CNR GIS Portal")
-    tz_mode = st.radio("Timezone", ["Local (EST/EDT)", "UTC"], horizontal=True)
-    
-    col_a, col_b = st.columns(2)
-    s_date = col_a.date_input("Start Date", value=datetime.now().date())
-    e_date = col_b.date_input("End Date", value=datetime.now().date())
+    tz_mode = st.radio("Timezone", ["Local (EST/EDT)", "UTC"])
+    s_date = st.date_input("Start Date", value=datetime.now().date())
+    e_date = st.date_input("End Date", value=datetime.now().date())
 
     c1, c2 = st.columns(2)
-    s_time = c1.selectbox("Start", [f"{h:02d}:00" for h in range(24)], index=19)
-    e_time = c2.selectbox("End", [f"{h:02d}:00" for h in range(24)], index=21)
+    hours = [f"{h:02d}:00" for h in range(24)]
+    s_time = c1.selectbox("Start", hours, index=19)
+    e_time = c2.selectbox("End", hours, index=21)
 
-    up_zip = st.file_uploader("Upload Watershed ZIP", type="zip", label_visibility="collapsed")
-    
+    up_zip = st.file_uploader("Upload Watershed ZIP", type="zip")
+    basin_name = "Default_Basin"
     if up_zip:
+        basin_name = up_zip.name.replace(".zip", "")
         with tempfile.TemporaryDirectory() as td:
             with zipfile.ZipFile(up_zip, 'r') as z: z.extractall(td)
             shps = list(Path(td).rglob("*.shp"))
@@ -208,65 +238,95 @@ with st.sidebar:
                     cache[ts.strftime("%H:%M")] = {"path": path, "bounds": bnds}
                     stats.append({"time": ts, "rain_in": val})
                 pb.progress((i + 1) / len(tr))
-            st.session_state.radar_cache, st.session_state.time_list = cache, list(cache.keys())
+            
+            st.session_state.radar_cache = cache
+            st.session_state.time_list = list(cache.keys())
             st.session_state.current_time_index = 0
-            st.session_state.basin_vault[up_zip.name] = pd.DataFrame(stats)
+            # Save this specific run to the vault
+            st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
 
+    # --- MULTI-FILE DOWNLOADER ---
     if st.session_state.basin_vault:
         st.write("---")
-        target_file = st.selectbox("Select CSV", options=list(st.session_state.basin_vault.keys()))
-        df_target = st.session_state.basin_vault[target_file]
+        st.subheader("📁 Processed Basins")
         
-        c3, c4 = st.columns(2)
-        if c3.button("📊 PLOT", use_container_width=True):
+        # Select which CSV file to interact with
+        target_basin = st.selectbox("Select CSV to Download", options=list(st.session_state.basin_vault.keys()))
+        df_target = st.session_state.basin_vault[target_basin]
+        
+        if st.button(f"📊 PLOT {target_basin}", use_container_width=True):
             import plotly.express as px
-            @st.dialog(f"Stats: {target_file}", width="large")
+            @st.dialog(f"Stats: {target_basin}", width="large")
             def modal():
                 st.plotly_chart(px.bar(df_target, x='time', y='rain_in', template="plotly_dark"), use_container_width=True)
             modal()
         
-        c4.download_button("💾 CSV", data=df_target.to_csv(index=False).encode('utf-8'), 
-                           file_name=f"{target_file}.csv", use_container_width=True)
+        csv_data = df_target.to_csv(index=False).encode('utf-8')
+        st.download_button(f"DOWNLOAD {target_basin}.CSV", data=csv_data, file_name=f"{target_basin}.csv", use_container_width=True)
 
 # -----------------------------
-# 5. ANIMATION & MAP
+# 6. ANIMATION LOGIC
 # -----------------------------
 if st.session_state.time_list and st.session_state.is_playing:
     st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
-    time.sleep(0.4)
+    time.sleep(0.5)
     st.rerun()
 
+# -----------------------------
+# 7. MAP RENDER
+# -----------------------------
 layers = []
 if st.session_state.time_list:
-    curr = st.session_state.radar_cache[st.session_state.time_list[st.session_state.current_time_index]]
+    current_time_str = st.session_state.time_list[st.session_state.current_time_index]
+    curr = st.session_state.radar_cache[current_time_str]
     layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7))
 
 if st.session_state.active_gdf is not None:
     layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                             stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
-st.pydeck_chart(pdk.Deck(
+# Create deck with explicit height to prevent Streamlit clamping
+deck = pdk.Deck(
     layers=layers,
     initial_view_state=st.session_state.map_view,
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-), use_container_width=True)
+)
+
+# Render with explicit height - CSS will make it 100vh but this prevents initial clamp
+st.pydeck_chart(deck, use_container_width=True, height=1000)
 
 # -----------------------------
-# 6. FLOATING CONTROLS
+# 8. CONTROLS (positioned at bottom by CSS)
 # -----------------------------
 if st.session_state.time_list:
-    play_col, slide_col, text_col = st.columns([1, 10, 2])
-    with play_col:
-        if st.button("⏸" if st.session_state.is_playing else "▶", key="playback"):
-            st.session_state.is_playing = not st.session_state.is_playing
-            st.rerun()
-    with slide_col:
-        new_idx = st.select_slider("", options=range(len(st.session_state.time_list)), 
-                                   value=st.session_state.current_time_index,
-                                   format_func=lambda x: st.session_state.time_list[x], label_visibility="collapsed")
-        if new_idx != st.session_state.current_time_index:
-            st.session_state.current_time_index = new_idx
+    st.markdown('<div class="controls-float">', unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1, 10, 2])
+
+    with col1:
+        if st.session_state.is_playing:
+            if st.button("⏸", key="pause_btn"):
+                st.session_state.is_playing = False
+                st.rerun()
+        else:
+            if st.button("▶", key="play_btn"):
+                st.session_state.is_playing = True
+                st.rerun()
+
+    with col2:
+        selected_index = st.select_slider(
+            "",
+            options=range(len(st.session_state.time_list)),
+            value=st.session_state.current_time_index,
+            format_func=lambda x: st.session_state.time_list[x],
+            label_visibility="collapsed",
+        )
+        if selected_index != st.session_state.current_time_index:
+            st.session_state.current_time_index = selected_index
             st.session_state.is_playing = False
             st.rerun()
-    with text_col:
-        st.write(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
+
+    with col3:
+        st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
+
+    st.markdown("</div>", unsafe_allow_html=True)
