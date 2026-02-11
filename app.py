@@ -17,55 +17,54 @@ from matplotlib.colors import ListedColormap
 import rioxarray 
 
 # -----------------------------
-# 1. PAGE CONFIG
+# 1. PAGE CONFIG & FULLSCREEN CSS
 # -----------------------------
 st.set_page_config(layout="wide", page_title="CNR Radar Portal")
 
-# -----------------------------
-# 2. THE "TRUE FULL SCREEN" FIX
-# -----------------------------
 st.markdown("""
 <style>
-    /* Force the main container to fill 100% of the viewport height */
-    .main .block-container {
-        padding: 0 !important;
-        max-width: 100% !important;
-        height: 100vh !important;
-        display: flex;
-        flex-direction: column;
+    /* 1. Force the App to be a true fullscreen canvas */
+    [data-testid="stAppViewContainer"] {
+        background-color: #0e1117;
     }
 
-    /* Force the Map to expand to all available remaining space */
+    /* 2. Fix the Map to the background - This kills the 'half screen' bug */
     .stPydeckChart {
-        flex-grow: 1 !important;
-        height: 90vh !important; /* This kills the half-screen bug */
-        width: 100% !important;
+        position: fixed !important;
+        top: 0;
+        left: 0;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: 0;
     }
 
-    /* Keep sidebar wide and solid */
+    /* 3. Make the sidebar solid so it doesn't clash with map colors */
     [data-testid="stSidebar"] {
-        min-width: 380px !important;
         background-color: #111 !important;
+        z-index: 100;
+        border-right: 1px solid #333;
     }
 
-    /* Position the timeline slider floating over the bottom of the map */
+    /* 4. Style the Timeline Slider at the bottom */
     .stSlider {
         position: fixed !important;
         bottom: 30px !important;
-        left: 400px !important;
-        right: 50px !important;
-        z-index: 100;
-        background: rgba(0,0,0,0.7) !important;
+        left: 380px !important;
+        right: 40px !important;
+        z-index: 1000 !important;
+        background: rgba(10, 10, 10, 0.85) !important;
         padding: 10px 30px !important;
         border-radius: 50px !important;
+        border: 1px solid #444;
     }
 
+    /* Hide standard Streamlit headers */
     header, footer { visibility: hidden !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------
-# 3. STATE & DIRECTORY
+# 2. STATE & DIRECTORY
 # -----------------------------
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
@@ -81,7 +80,7 @@ if "img_dir" not in st.session_state:
     st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
 
 # -----------------------------
-# 4. RADAR ENGINE
+# 3. RADAR ENGINE
 # -----------------------------
 def get_radar_image(dt_utc):
     ts_str = dt_utc.strftime("%Y%m%d-%H%M00")
@@ -116,7 +115,7 @@ def get_radar_image(dt_utc):
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
 # -----------------------------
-# 5. SIDEBAR (Restored Features)
+# 4. SIDEBAR
 # -----------------------------
 with st.sidebar:
     st.title("CNR GIS Portal")
@@ -158,10 +157,10 @@ with st.sidebar:
             st.session_state.radar_cache, st.session_state.time_list = cache, list(cache.keys())
             st.session_state.processed_df = pd.DataFrame(stats)
 
-    # RESTORED BUTTONS
+    # --- RESTORED & IMPROVED DATA SECTION ---
     if st.session_state.processed_df is not None:
         st.write("---")
-        if st.button("SHOW PLOT", use_container_width=True):
+        if st.button("📊 SHOW ANALYSIS PLOT", use_container_width=True):
             import plotly.express as px
             @st.dialog("Rainfall Statistics", width="large")
             def modal():
@@ -170,15 +169,24 @@ with st.sidebar:
                 st.plotly_chart(fig, use_container_width=True)
             modal()
         
-        csv = st.session_state.processed_df.to_csv(index=False).encode('utf-8')
-        st.download_button("DOWNLOAD CSV", data=csv, file_name="radar_stats.csv", mime='text/csv', use_container_width=True)
+        st.subheader("📁 Data Downloads")
+        # File selector to choose which timestamp to download
+        selected_file_time = st.selectbox("Select Timestamp to View/Download", st.session_state.time_list)
+        
+        # Display the specific value for that timestamp
+        val = st.session_state.processed_df[st.session_state.processed_df['time'].dt.strftime("%H:%M") == selected_file_time]['rain_in'].values[0]
+        st.metric(label=f"Rainfall at {selected_file_time}", value=f"{val:.4f} in")
+        
+        # Download the full CSV
+        full_csv = st.session_state.processed_df.to_csv(index=False).encode('utf-8')
+        st.download_button("DOWNLOAD FULL CSV", data=full_csv, file_name="radar_full_stats.csv", mime='text/csv', use_container_width=True)
 
 # -----------------------------
-# 6. MAP RENDER
+# 5. MAP RENDER
 # -----------------------------
 layers = []
 if st.session_state.time_list:
-    # Timeline Slider
+    # Use select_slider with a custom style (handled in CSS above)
     t_str = st.select_slider("", options=st.session_state.time_list, label_visibility="collapsed")
     curr = st.session_state.radar_cache[t_str]
     layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7))
