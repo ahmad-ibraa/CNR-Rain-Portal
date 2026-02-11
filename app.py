@@ -25,266 +25,9 @@ from shapely.geometry import Point
 import json
 import streamlit.components.v1 as components
 
-
-UTC_TZ = ZoneInfo("UTC")
-
-# user-selectable timezones (add/remove as you like)
-TZ_OPTIONS = {
-    "UTC": "UTC",
-    "New York (ET)": "America/New_York",
-    "Chicago (CT)": "America/Chicago",
-    "Denver (MT)": "America/Denver",
-    "Los Angeles (PT)": "America/Los_Angeles",
-}
-
-# --- minimum allowed timestamp (absolute truth in UTC) ---
-MIN_UTC = datetime(2020, 10, 15, 0, 0, 0)  # naive UTC baseline
-
-
-# =============================
-# 1) PAGE CONFIG
-# =============================
-st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar_state="expanded")
-
-# =============================
-# 2) CSS (FULL RESTORATION + SLIDER FIX)
-# =============================
-st.markdown(
-    """
-<style>
-/* --- 1. GLOBAL LAYOUT --- */
-html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"]{
-  height:100vh !important; width:100vw !important;
-  margin:0 !important; padding:0 !important;
-  overflow:hidden !important;
-  background:#000 !important;
-}
-
-.main .block-container{
-  padding:0 !important; margin:0 !important;
-  max-width:100vw !important;
-}
-
-header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"]{
-  display:none !important; height:0 !important; visibility:hidden !important;
-}
-
-/* --- 2. SIDEBAR (Locked & Styled) --- */
-[data-testid="stSidebar"]{
-  position:fixed !important;
-  left:0 !important; top:0 !important;
-  height:100vh !important;
-  min-width:400px !important;
-  max-width:400px !important;
-  width:400px !important;
-  background:rgba(17,17,17,0.95) !important;
-  backdrop-filter: blur(10px);
-  border-right:1px solid rgba(255,255,255,0.08);
-  z-index:5000 !important;
-}
-[data-testid="stSidebarResizer"], [data-testid="collapsedControl"], button[title="Collapse sidebar"]{
-  display:none !important;
-}
-[data-testid="stSidebarContent"]{
-  height:100vh !important;
-  overflow:auto !important;
-  padding:10px 12px !important;
-}
-
-/* Sidebar Button Styling */
-[data-testid="stSidebar"] .stButton button{
-  width:100% !important;
-  border-radius:10px !important;
-  height:44px !important;
-  font-weight:650 !important;
-}
-
-/* --- 3. MAP OVERLAY --- */
-#deckgl-wrapper{
-  position:fixed !important;
-  inset:0 !important;
-  z-index: 0 !important;
-}
-
-/* --- 4. FLOATING CONTROL BAR (The Slider Fix) --- */
-/* The main container must allow clicks to pass through to the map, 
-   but we RE-ENABLE them for the controls. */
-   #deckgl-wrapper, #deckgl-wrapper canvas {
-  pointer-events: auto !important;
-}
-
-[data-testid="stSidebar"], .control-bar-wrapper, .stButton, .stSlider, .stSelectSlider {
-    pointer-events: auto !important;
-}
-
-.control-bar-wrapper {
-  position: fixed !important;
-  left: 420px !important;
-  right: 18px !important;
-  bottom: 18px !important;
-  z-index: 1000000 !important; /* Extremely high to stay on top */
-  background: rgba(15,15,15,0.92) !important;
-  padding: 12px 16px !important;
-  border-radius: 999px !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
-  backdrop-filter: blur(10px);
-}
-
-/* Round Play/Pause Button */
-.control-bar-wrapper .stButton button {
-  border-radius: 999px !important;
-  width: 44px !important;
-  height: 44px !important;
-  padding: 0 !important;
-  font-size: 18px !important;
-}
-
-/* --- 5. MISC --- */
-.output-link a{ text-decoration:none !important; font-weight:600 !important; }
-.output-link a:hover{ text-decoration:underline !important; }
-
-</style>
-""",
-    unsafe_allow_html=True,
-)
-st.markdown("""
-<style>
-/* map still interactive */
-#deckgl-wrapper, #deckgl-wrapper canvas { pointer-events:auto !important; }
-
-/* floating controls container (JS adds this class) */
-.floating-controls{
-  position: fixed !important;
-  left: 420px !important;
-  right: 18px !important;
-  bottom: 18px !important;
-  z-index: 1000000 !important;
-  background: rgba(15,15,15,0.92) !important;
-  padding: 12px 16px !important;
-  border-radius: 999px !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
-  backdrop-filter: blur(10px);
-  pointer-events: auto !important;
-
-  box-sizing: border-box !important;
-  max-width: calc(100vw - 420px - 18px) !important;
-  overflow: hidden !important;
-}
-
-.floating-controls *{ pointer-events:auto !important; }
-
-/* allow Streamlit columns to shrink instead of overflow */
-.floating-controls [data-testid="column"]{ min-width: 0 !important; }
-
-/* timestamp truncation */
-.floating-controls .timestamp{
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* ---------- Floating bar: center contents ---------- */
-.floating-controls{
-  height: 70px !important;                 /* give it a stable height */
-  display: flex !important;
-  align-items: center !important;          /* vertical centering */
-}
-
-/* Streamlit columns row inside the floating bar */
-.floating-controls [data-testid="stHorizontalBlock"]{
-  align-items: center !important;          /* vertical centering */
-  gap: 14px !important;
-}
-
-/* Reduce extra vertical padding Streamlit adds around widgets */
-.floating-controls [data-testid="stSlider"]{
-  margin-top: -6px !important;
-  margin-bottom: -6px !important;
-}
-
-/* ---------- Slider restyle (BaseWeb slider) ---------- */
-.floating-controls [data-baseweb="slider"]{
-  padding: 0 10px !important;
-}
-
-/* Track (unfilled + filled) - BaseWeb usually uses 2 bars */
-.floating-controls [data-baseweb="slider"] > div{
-  align-items: center !important;
-}
-
-/* These selectors are intentionally broad because Streamlit hashes classnames */
-.floating-controls [data-baseweb="slider"] div[role="progressbar"]{
-  height: 8px !important;
-  border-radius: 999px !important;
-  background: rgba(255,255,255,0.14) !important;  /* unfilled track */
-}
-
-/* Filled portion sits inside the progressbar in many Streamlit builds */
-.floating-controls [data-baseweb="slider"] div[role="progressbar"] > div{
-  height: 8px !important;
-  border-radius: 999px !important;
-  background: rgba(1,160,254,0.95) !important;    /* filled track */
-  box-shadow: 0 0 10px rgba(1,160,254,0.25);
-}
-
-/* Thumb */
-.floating-controls [data-baseweb="slider"] div[role="slider"]{
-  width: 18px !important;
-  height: 18px !important;
-  border-radius: 999px !important;
-  background: #01a0fe !important;
-  border: 2px solid rgba(255,255,255,0.85) !important;
-  box-shadow: 0 6px 16px rgba(0,0,0,0.45), 0 0 14px rgba(1,160,254,0.25) !important;
-}
-
-/* Optional: make the timestamp look more “HUD-like” */
-.floating-controls .timestamp{
-  opacity: 0.95;
-  letter-spacing: 0.2px;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-
-
-# app.py
-# Clean rewrite that preserves your behavior:
-# - Sidebar controls (timezone, date/time, upload ZIP, zoom-to-place)
-# - Municipality picker (folium) -> click selects boundary and behaves like "uploaded"
-# - One boundary at a time; removable in sidebar
-# - Processing unchanged in logic; keeps your RO/MRMS cropping + scaling + PNG cache
-# - PyDeck viewer + floating timeline controls (kept; you can keep your CSS as-is above)
-
-import streamlit as st
-import pandas as pd
-import geopandas as gpd
-import xarray as xr
-import numpy as np
-import requests
-import gzip
-import shutil
-import tempfile
-import os
-import zipfile
-import pydeck as pdk
-import gc
-from datetime import datetime, timedelta
-from pathlib import Path
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
-import rioxarray
-import base64
-from zoneinfo import ZoneInfo
-import folium
-from folium.features import GeoJsonTooltip
-from streamlit_folium import st_folium
-from shapely.geometry import Point
-import json
-import streamlit.components.v1 as components
-
-# =============================
+# =========================================================
 # 0) CONSTANTS
-# =============================
+# =========================================================
 UTC_TZ = ZoneInfo("UTC")
 
 TZ_OPTIONS = {
@@ -306,38 +49,59 @@ MUNI_NAME_FIELD   = "GNIS_NAME"
 RADAR_COLORS = ["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"]
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
-# =============================
+# =========================================================
 # 1) PAGE CONFIG
-# =============================
+# =========================================================
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar_state="expanded")
 
-# =============================
-# 2) STATE
-# =============================
+# =========================================================
+# 2) CSS: FIX TOP OFFSET (keep your existing CSS; add this)
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Ensure nothing pushes the main content down */
+.main, section.main { padding-top: 0rem !important; margin-top: 0rem !important; }
+.main .block-container { padding-top: 0rem !important; margin-top: 0rem !important; }
+div[data-testid="stAppViewContainer"] { padding-top: 0rem !important; margin-top: 0rem !important; }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# 3) STATE
+# =========================================================
 def init_state():
     defaults = {
-        "radar_cache": {},              # {label: {"path":..., "bounds":[lonmin,latmin,lonmax,latmax]}}
-        "time_list": [],                # [label,...] sorted
+        # radar rendering cache
+        "radar_cache": {},
+        "time_list": [],
         "current_time_label": None,
         "is_playing": False,
         "current_time_index": 0,
 
-        "active_gdf": None,             # selected boundary (either upload or muni)
+        # boundaries
+        "active_gdf": None,             # used for processing + pydeck outline (chosen boundary)
         "boundary_source": None,        # "upload" | "muni"
-        "boundary_name": None,          # display name
+        "boundary_name": None,
 
-        "basin_vault": {},              # {basin_name: df}
-        "map_view": pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9),
+        # multi-muni selection (folium overlays)
+        "muni_layers": {},              # dict[name] -> geojson dict (single-feature FC)
 
+        # view + outputs
+        "basin_vault": {},
+        "map_view": pdk.ViewState(latitude=40.1, longitude=-74.6, zoom=8),
         "img_dir": tempfile.mkdtemp(prefix="radar_png_"),
-
         "processing_msg": "",
 
+        # UI
         "tz_name": "America/New_York",
         "show_munis": True,
         "search_query": "",
 
-        "mode": "select",               # "select" or "view"
+        # mode
+        "mode": "select",               # "select" (folium) | "view" (pydeck)
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -345,12 +109,11 @@ def init_state():
 
 init_state()
 
-# Keep LOCAL_TZ always defined
 LOCAL_TZ = ZoneInfo(st.session_state.tz_name)
 
-# =============================
-# 3) CACHED LOADERS
-# =============================
+# =========================================================
+# 4) CACHED LOADERS
+# =========================================================
 @st.cache_data(show_spinner=False)
 def load_munis_cached(path: str) -> tuple[gpd.GeoDataFrame, dict]:
     gdf = gpd.read_file(path)
@@ -358,10 +121,10 @@ def load_munis_cached(path: str) -> tuple[gpd.GeoDataFrame, dict]:
         gdf = gdf.set_crs("EPSG:4326")
     else:
         gdf = gdf.to_crs("EPSG:4326")
-    geojson_dict = json.loads(gdf.to_json())  # hashable output
+    geojson_dict = json.loads(gdf.to_json())
     return gdf, geojson_dict
 
-@st.cache_data(show_spinner=False, ttl=24*3600)
+@st.cache_data(show_spinner=False, ttl=24 * 3600)
 def geocode_place(query: str):
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": query, "format": "json", "limit": 1}
@@ -373,9 +136,9 @@ def geocode_place(query: str):
         return None
     return float(js[0]["lat"]), float(js[0]["lon"])
 
-# =============================
-# 4) SMALL HELPERS
-# =============================
+# =========================================================
+# 5) HELPERS
+# =========================================================
 def csv_download_link(df: pd.DataFrame, filename: str, label: str):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     b64 = base64.b64encode(csv_bytes).decode()
@@ -516,21 +279,29 @@ def load_precip(file_type: str, dt_local_naive: datetime) -> xr.DataArray | None
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# =============================
-# 5) MAP: MUNICIPALITY PICKER
-# =============================
-def muni_picker(muni_gdf: gpd.GeoDataFrame, muni_geojson: dict, center, zoom):
-    m = folium.Map(location=center, zoom_start=zoom, tiles="CartoDB dark_matter")
+# =========================================================
+# 6) FOLIUM: MULTI-MUNICIPALITY PICKER (NO PYDECK SWITCH)
+# =========================================================
+def render_muni_picker_map(muni_gdf: gpd.GeoDataFrame, muni_geojson: dict, center=(40.1, -74.6), zoom=8):
+    m = folium.Map(location=center, zoom_start=zoom, tiles="CartoDB dark_matter", control_scale=False)
 
-    folium.GeoJson(
-        muni_geojson,
-        name="NJ Municipalities",
-        style_function=lambda feat: {"color": "#ffffff", "weight": 1, "fillColor": "#000000", "fillOpacity": 0.00},
-        highlight_function=lambda feat: {"weight": 3, "color": "#01a0fe", "fillOpacity": 0.10},
-        tooltip=GeoJsonTooltip(fields=[MUNI_NAME_FIELD], aliases=["Municipality:"]),
-    ).add_to(m)
+    # base muni layer (clickable)
+    if st.session_state.show_munis:
+        folium.GeoJson(
+            muni_geojson,
+            name="NJ Municipalities",
+            style_function=lambda feat: {"color": "#ffffff", "weight": 1, "fillColor": "#000000", "fillOpacity": 0.00},
+            highlight_function=lambda feat: {"weight": 3, "color": "#01a0fe", "fillOpacity": 0.10},
+            tooltip=GeoJsonTooltip(fields=[MUNI_NAME_FIELD], aliases=["Municipality:"]),
+        ).add_to(m)
 
-    folium.LayerControl(collapsed=True).add_to(m)
+    # overlays: selected muni boundaries (multi)
+    for name, gj in st.session_state.muni_layers.items():
+        folium.GeoJson(
+            gj,
+            name=name,
+            style_function=lambda feat: {"color": "#01a0fe", "weight": 3, "fillOpacity": 0.0},
+        ).add_to(m)
 
     out = st_folium(
         m,
@@ -541,7 +312,7 @@ def muni_picker(muni_gdf: gpd.GeoDataFrame, muni_geojson: dict, center, zoom):
     )
 
     clicked = out.get("last_clicked")
-    if not (clicked and isinstance(clicked, dict) and "lat" in clicked and "lng" in clicked):
+    if not (st.session_state.show_munis and clicked and isinstance(clicked, dict) and "lat" in clicked and "lng" in clicked):
         return
 
     pt = Point(clicked["lng"], clicked["lat"])
@@ -554,56 +325,49 @@ def muni_picker(muni_gdf: gpd.GeoDataFrame, muni_geojson: dict, center, zoom):
     sel = hit.iloc[[0]].copy()
     name = str(sel.iloc[0][MUNI_NAME_FIELD]) if MUNI_NAME_FIELD in sel.columns else "Selected municipality"
 
-    # no rerun loop
-    if st.session_state.boundary_source == "muni" and st.session_state.boundary_name == name:
+    # If already selected, do nothing
+    if name in st.session_state.muni_layers:
         return
 
+    # store overlay (folium display)
+    st.session_state.muni_layers[name] = json.loads(sel.to_json())
+
+    # OPTIONAL: also set "active_gdf" to last clicked, so processing uses it by default
     st.session_state.active_gdf = sel
     st.session_state.boundary_source = "muni"
     st.session_state.boundary_name = name
 
+    # update view center for later pydeck
     b = sel.total_bounds
     st.session_state.map_view = pdk.ViewState(
         latitude=(b[1] + b[3]) / 2,
         longitude=(b[0] + b[2]) / 2,
         zoom=11,
     )
-    st.session_state.mode = "view"
+
     st.rerun()
 
-# =============================
-# 6) SIDEBAR UI
-# =============================
+# =========================================================
+# 7) SIDEBAR (DE-CLUTTERED)
+# =========================================================
 with st.sidebar:
-    st.title("CNR GIS Portal")
-    st.divider()
-
-    # --- Active boundary (behaves like "uploaded file" slot) ---
-    if st.session_state.active_gdf is not None:
-        st.subheader("Active Boundary")
-        src = st.session_state.boundary_source or "unknown"
-        nm = st.session_state.boundary_name or "Unnamed"
-        st.write(f"Source: **{src}**")
-        st.write(f"Name: **{nm}**")
-
-        if st.button("Remove boundary", use_container_width=True):
-            st.session_state.active_gdf = None
-            st.session_state.boundary_source = None
-            st.session_state.boundary_name = None
-            st.session_state.mode = "select"
-            st.rerun()
-
-        st.divider()
-
-    st.subheader("Map Layers")
+    # checkbox only (no header/description)
     st.session_state.show_munis = st.checkbox("Show NJ Municipalities", value=st.session_state.show_munis)
-    st.caption("Click a municipality on the map to select it.")
 
-    st.divider()
-    st.subheader("Search (Zoom to place)")
-    q = st.text_input("City / place", value=st.session_state.search_query, placeholder="e.g., Newark, NJ")
-    st.session_state.search_query = q
-    if st.button("Zoom", use_container_width=True) and q.strip():
+    # city search: input + icon button beside it
+    c1, c2 = st.columns([12, 2])
+    with c1:
+        q = st.text_input(
+            "City / place",
+            value=st.session_state.search_query,
+            placeholder="e.g., Newark, NJ",
+            label_visibility="collapsed",
+        )
+        st.session_state.search_query = q
+    with c2:
+        do_zoom = st.button("🔍", use_container_width=True)
+
+    if do_zoom and q.strip():
         hit = geocode_place(q.strip())
         if hit is None:
             st.warning("No results found.")
@@ -612,7 +376,24 @@ with st.sidebar:
             st.session_state.map_view = pdk.ViewState(latitude=lat, longitude=lon, zoom=11)
             st.rerun()
 
+    # minimal selected-muni list (only appears when you have selections)
+    if st.session_state.muni_layers:
+        st.caption("Selected municipalities")
+        for name in list(st.session_state.muni_layers.keys()):
+            r1, r2 = st.columns([10, 2])
+            r1.write(name)
+            if r2.button("✕", key=f"rm_{name}", use_container_width=True):
+                del st.session_state.muni_layers[name]
+                # if you removed the active muni, clear active_gdf if it matched
+                if st.session_state.boundary_source == "muni" and st.session_state.boundary_name == name:
+                    st.session_state.active_gdf = None
+                    st.session_state.boundary_source = None
+                    st.session_state.boundary_name = None
+                st.rerun()
+
+    # ---- Everything else stays as-is (timezone/date/upload/run) ----
     st.divider()
+
     tz_label = st.selectbox(
         "Time Zone",
         list(TZ_OPTIONS.keys()),
@@ -623,7 +404,6 @@ with st.sidebar:
     st.session_state.tz_name = TZ_OPTIONS[tz_label]
     LOCAL_TZ = ZoneInfo(st.session_state.tz_name)
 
-    # clamp to MIN_UTC expressed in local
     min_local_dt = utc_naive_to_local_naive(MIN_UTC)
     min_local_date = min_local_dt.date()
 
@@ -631,9 +411,9 @@ with st.sidebar:
     e_date = st.date_input("End Date", value=max(datetime.now().date(), min_local_date), min_value=min_local_date)
 
     hours = [f"{h:02d}:00" for h in range(24)]
-    c1, c2 = st.columns(2)
-    s_time = c1.selectbox("Start Time", hours, index=0)
-    e_time = c2.selectbox("End Time", hours, index=0)
+    c3, c4 = st.columns(2)
+    s_time = c3.selectbox("Start Time", hours, index=0)
+    e_time = c4.selectbox("End Time", hours, index=0)
 
     up_zip = st.file_uploader("Watershed Boundary (ZIP)", type="zip")
     basin_name = up_zip.name.replace(".zip", "") if up_zip else "Default_Basin"
@@ -655,13 +435,13 @@ with st.sidebar:
                     longitude=(b[0] + b[2]) / 2,
                     zoom=11,
                 )
-                st.session_state.mode = "select"  # keep selection UI until user runs processing
+                # stay in folium select until processing is run
+                st.session_state.mode = "select"
                 st.rerun()
 
     if st.session_state.processing_msg:
         st.caption(st.session_state.processing_msg)
 
-    # Run Processing button
     if st.button("Run Processing", use_container_width=True):
         try:
             if st.session_state.active_gdf is None:
@@ -680,9 +460,11 @@ with st.sidebar:
                 st.warning(f"Start time clamped to minimum: {min_local_dt.strftime('%Y-%m-%d %H:%M')} ({tz_label})")
 
             ro_times   = list(pd.date_range(start_dt + timedelta(minutes=15), end_dt, freq="15min"))
-            mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)),
-                                            end_dt.replace(minute=0, second=0, microsecond=0),
-                                            freq="1H"))
+            mrms_times = list(pd.date_range(
+                ceil_to_hour(start_dt + timedelta(minutes=45)),
+                end_dt.replace(minute=0, second=0, microsecond=0),
+                freq="1H"
+            ))
 
             pb, msg = st.progress(0.0), st.empty()
             total_steps = max(1, len(ro_times) + len(mrms_times) + 6)
@@ -764,6 +546,7 @@ with st.sidebar:
                 if h_end and tdt >= h_end - timedelta(minutes=45):
                     h_idx = m_ends.index(h_end)
                     s_frame = (drop_time_coord(ro.sel(time=tdt)) * drop_time_coord(scaling.isel(time=h_idx))).astype("float32")
+
                     img, bnds = save_frame_png(s_frame, tdt)
                     lbl = tdt.strftime("%Y-%m-%d %H:%M")
                     cache[lbl] = {"path": img, "bounds": bnds}
@@ -785,19 +568,15 @@ with st.sidebar:
             st.exception(e)
             st.stop()
 
-    # Rainfall chart + export
+    # Rainfall chart + export (unchanged)
     if st.session_state.basin_vault and basin_name in st.session_state.basin_vault:
         st.divider()
-        st.subheader("Rainfall Analysis")
         df = st.session_state.basin_vault[basin_name]
-
         fig, ax = plt.subplots(figsize=(5, 3.5))
         ax.bar(df["time"], df["rain_in"], width=0.006, edgecolor="white", linewidth=0.3)
-
         if st.session_state.current_time_label:
             curr_time = pd.to_datetime(st.session_state.current_time_label)
             ax.axvline(curr_time, linestyle="--", alpha=0.8, lw=1)
-
         ax.set_ylabel("Inches", color="gray")
         ax.set_facecolor("#0e1117")
         fig.patch.set_facecolor("#0e1117")
@@ -806,27 +585,26 @@ with st.sidebar:
             spine.set_visible(False)
         plt.xticks(rotation=45)
         st.pyplot(fig)
-
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
 
-# =============================
-# 7) MAIN DISPLAY
-# =============================
+# =========================================================
+# 8) MAIN DISPLAY (IMPORTANT: render map FIRST to avoid offset)
+# =========================================================
 if st.session_state.mode == "select":
-    if st.session_state.show_munis:
-        muni_gdf, muni_geojson = load_munis_cached(MUNI_GEOJSON_PATH)
+    muni_gdf, muni_geojson = load_munis_cached(MUNI_GEOJSON_PATH)
 
-        if st.session_state.active_gdf is not None:
-            b = st.session_state.active_gdf.total_bounds
-            center = ((b[1] + b[3]) / 2, (b[0] + b[2]) / 2)
-            zoom = 10
-        else:
-            center = (40.1, -74.6)
-            zoom = 8
-
-        muni_picker(muni_gdf, muni_geojson, center=center, zoom=zoom)
+    # center/zoom: if you have an active boundary, center there
+    if st.session_state.active_gdf is not None:
+        b = st.session_state.active_gdf.total_bounds
+        center = ((b[1] + b[3]) / 2, (b[0] + b[2]) / 2)
+        zoom = 10
     else:
-        st.info("Enable 'Show NJ Municipalities' to pick by click.")
+        center = (40.1, -74.6)
+        zoom = 8
+
+    # render folium map (multi-muni overlays; does NOT switch to pydeck)
+    render_muni_picker_map(muni_gdf, muni_geojson, center=center, zoom=zoom)
+
 else:
     layers = []
 
@@ -836,15 +614,10 @@ else:
             st.session_state.current_time_label = st.session_state.time_list[0]
         curr = st.session_state.radar_cache[st.session_state.current_time_label]
         layers.append(
-            pdk.Layer(
-                "BitmapLayer",
-                image=curr["path"],
-                bounds=curr["bounds"],
-                opacity=0.70,
-            )
+            pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70)
         )
 
-    # Boundary outline
+    # Boundary outline (uses active_gdf)
     if st.session_state.active_gdf is not None:
         layers.append(
             pdk.Layer(
@@ -862,12 +635,11 @@ else:
         initial_view_state=st.session_state.map_view,
         map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     )
-    deck_key = f"map_{st.session_state.current_time_label}"
-    st.pydeck_chart(deck, use_container_width=True, height=1000, key=deck_key)
+    st.pydeck_chart(deck, use_container_width=True, height=1000, key=f"map_{st.session_state.current_time_label}")
 
-# =============================
-# 8) FLOATING CONTROLS
-# =============================
+# =========================================================
+# 9) FLOATING CONTROLS (unchanged)
+# =========================================================
 if st.session_state.mode == "view" and st.session_state.time_list:
     with st.container():
         st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
@@ -893,7 +665,6 @@ if st.session_state.mode == "view" and st.session_state.time_list:
                 unsafe_allow_html=True,
             )
 
-    # Add the CSS class hook; keep your existing CSS unchanged
     components.html(
         """
 <script>
