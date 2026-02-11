@@ -15,20 +15,41 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
-# --- 1. PAGE CONFIG & UI LOCK ---
-st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
+# --- 1. PAGE CONFIG & AGGRESSIVE FULL-SCREEN CSS ---
+st.set_page_config(layout="wide", page_title="CNR Radar Portal")
 
 st.markdown("""
     <style>
-        .block-container { padding: 0rem 1rem 0rem 1rem !important; }
+        /* 1. Remove all margins, headers, and footers */
+        .block-container { padding: 0rem !important; max-width: 100% !important; }
         header, footer { display: none !important; }
         
-        /* Maximize Map Height */
-        div[data-testid="stPydeckChart"], iframe {
-            height: 88vh !important;
-            width: 100% !important;
+        /* 2. Force the Map to 92% of the window height */
+        /* This ensures it fills the page while leaving a tiny sliver for the slider */
+        [data-testid="stPydeckChart"], iframe {
+            height: 92vh !important;
+            width: 100vw !important;
         }
-        .stSlider { margin-top: -15px !important; }
+
+        /* 3. Style the "Show Plot" button to be wide and clean */
+        div.stButton > button {
+            width: 100% !important;
+            height: 50px !important;
+            font-weight: bold !important;
+            text-transform: uppercase;
+        }
+
+        /* 4. Fix the slider position so it sits on top of the map bottom */
+        .stSlider {
+            position: absolute;
+            bottom: 20px;
+            left: 5%;
+            right: 5%;
+            z-index: 999;
+            background: rgba(0,0,0,0.5);
+            padding: 10px 20px;
+            border-radius: 10px;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -36,15 +57,12 @@ st.markdown("""
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
-# Persistent storage for data and VIEWPORT
 if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'radar_cache' not in st.session_state: st.session_state.radar_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
 if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
-
-# This is the key to stopping the "Re-Zoom"
 if 'map_view' not in st.session_state: 
-    st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9, pitch=0, bearing=0)
+    st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 
 # --- 3. DATA ENGINE ---
 def get_radar_image(dt_utc):
@@ -83,7 +101,7 @@ def get_radar_image(dt_utc):
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
-    st.title("🛰️ CNR GIS Portal")
+    st.title("CNR GIS Portal")
     tz_mode = st.radio("Timezone", ["Local (EST/EDT)", "UTC"])
     s_date = st.date_input("Start Date", value=datetime.now().date())
     e_date = st.date_input("End Date", value=datetime.now().date())
@@ -101,14 +119,11 @@ with st.sidebar:
             if shps:
                 st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
                 b = st.session_state.active_gdf.total_bounds
-                # ONLY UPDATE VIEWPORT ONCE DURING UPLOAD
                 st.session_state.map_view = pdk.ViewState(
-                    latitude=(b[1]+b[3])/2, 
-                    longitude=(b[0]+b[2])/2, 
-                    zoom=11
+                    latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=11
                 )
 
-    if st.button("🚀 Process 15-Min Radar"):
+    if st.button("PROCESS RADAR DATA"):
         if st.session_state.active_gdf is not None:
             s_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
             e_dt = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
@@ -127,37 +142,37 @@ with st.sidebar:
             st.session_state.radar_cache = cache
             st.session_state.time_list = list(cache.keys())
             st.session_state.processed_df = pd.DataFrame(stats)
-        else: st.error("Upload ZIP first.")
 
+    # WIDE "SHOW PLOT" BUTTON
     if st.session_state.processed_df is not None:
-        if st.button("📊 Show Seamless Plot", type="primary"):
+        st.write("---")
+        if st.button("SHOW PLOT", type="primary"):
             import plotly.express as px
             @st.dialog("Rainfall Statistics")
             def modal():
                 fig = px.bar(st.session_state.processed_df, x='time', y='rain_in', template="plotly_dark")
-                fig.update_layout(bargap=0, margin=dict(l=10, r=10, t=10, b=10))
+                fig.update_layout(bargap=0, margin=dict(l=0, r=0, t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
             modal()
 
-# --- 5. MAIN MAP (SEAMLESS UPDATE) ---
-# We use st.pydeck_chart with a constant session-based view state
+# --- 5. MAIN MAP ---
 if st.session_state.time_list:
-    t_idx = st.select_slider("Timeline", options=range(len(st.session_state.time_list)),
-                             format_func=lambda x: st.session_state.time_list[x])
+    # Use a slider that is positioned via CSS to avoid pushing the map
+    t_idx = st.select_slider("Select Time", options=range(len(st.session_state.time_list)),
+                             format_func=lambda x: st.session_state.time_list[x], label_visibility="collapsed")
     
     current_data = st.session_state.radar_cache[st.session_state.time_list[t_idx]]
-    
     layers = [
         pdk.Layer("BitmapLayer", image=current_data["path"], bounds=current_data["bounds"], opacity=0.7),
         pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                   stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3)
     ]
     
-    # Passing st.session_state.map_view here ensures no re-zoom on interaction
+    # We use st.pydeck_chart. By keeping the Deck() configuration stable, we minimize flickering.
     st.pydeck_chart(pdk.Deck(
         layers=layers, 
         initial_view_state=st.session_state.map_view, 
-        map_style="dark"
+        map_style="dark",
     ))
 else:
     layers = []
