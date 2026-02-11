@@ -91,9 +91,10 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
 /* --- 4. FLOATING CONTROL BAR (The Slider Fix) --- */
 /* The main container must allow clicks to pass through to the map, 
    but we RE-ENABLE them for the controls. */
-[data-testid="stAppViewContainer"] {
-    pointer-events: none !important;
+   #deckgl-wrapper, #deckgl-wrapper canvas {
+  pointer-events: auto !important;
 }
+
 [data-testid="stSidebar"], .control-bar-wrapper, .stButton, .stSlider, .stSelectSlider {
     pointer-events: auto !important;
 }
@@ -128,6 +129,49 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
 """,
     unsafe_allow_html=True,
 )
+st.markdown("""
+<style>
+/* --- MAP LAYER --- */
+#deckgl-wrapper{
+  position:fixed !important;
+  inset:0 !important;
+  z-index: 0 !important;
+}
+#deckgl-wrapper, #deckgl-wrapper canvas{
+  pointer-events:auto !important;
+}
+
+/* --- FLOATING CONTROL BAR (REAL) --- */
+div:has(> #control_bar_anchor){
+  position: fixed !important;
+  left: 420px !important;
+  right: 18px !important;
+  bottom: 18px !important;
+  z-index: 1000000 !important;
+  background: rgba(15,15,15,0.92) !important;
+  padding: 12px 16px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  backdrop-filter: blur(10px);
+  pointer-events: auto !important;
+}
+
+/* Make sure widgets inside are clickable */
+div:has(> #control_bar_anchor) *{
+  pointer-events: auto !important;
+}
+
+/* Round Play/Pause Button */
+div:has(> #control_bar_anchor) .stButton button{
+  border-radius: 999px !important;
+  width: 44px !important;
+  height: 44px !important;
+  padding: 0 !important;
+  font-size: 18px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # =============================
 # 3) STATE
 # =============================
@@ -408,37 +452,39 @@ st.pydeck_chart(pdk.Deck(
 # 7) FLOATING CONTROLS
 # =============================
 if st.session_state.time_list:
-    # This wrapper div matches the CSS class above
-    st.markdown('<div class="control-bar-wrapper">', unsafe_allow_html=True)
-    
-    col_play, col_slider, col_txt = st.columns([1, 10, 3])
-    
-    with col_play:
-        btn_icon = "⏸" if st.session_state.is_playing else "▶"
-        if st.button(btn_icon, key="play_btn"):
-            st.session_state.is_playing = not st.session_state.is_playing
-            st.rerun()
-            
-    with col_slider:
-        idx = st.select_slider(
-            "Timeline",
-            options=list(range(len(st.session_state.time_list))),
-            value=int(st.session_state.current_time_index),
-            format_func=lambda i: st.session_state.time_list[i],
-            label_visibility="collapsed",
-            key="timeline_slider"
-        )
-        if idx != st.session_state.current_time_index:
-            st.session_state.current_time_index = idx
-            # If user manually slides, stop the auto-play
-            st.session_state.is_playing = False
-            st.rerun()
-            
-    with col_txt:
-        ts = st.session_state.time_list[st.session_state.current_time_index]
-        st.markdown(f'<p style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>', unsafe_allow_html=True)
-        
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.container():
+        # anchor that lets CSS "grab" THIS container and make it fixed
+        st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
+
+        col_play, col_slider, col_txt = st.columns([1, 10, 3])
+
+        with col_play:
+            btn_icon = "⏸" if st.session_state.is_playing else "▶"
+            if st.button(btn_icon, key="play_btn"):
+                st.session_state.is_playing = not st.session_state.is_playing
+                st.rerun()
+
+        with col_slider:
+            idx = st.select_slider(
+                "Timeline",
+                options=list(range(len(st.session_state.time_list))),
+                value=int(st.session_state.current_time_index),
+                format_func=lambda i: st.session_state.time_list[i],
+                label_visibility="collapsed",
+                key="timeline_slider"
+            )
+            if idx != st.session_state.current_time_index:
+                st.session_state.current_time_index = idx
+                st.session_state.is_playing = False
+                st.rerun()
+
+        with col_txt:
+            ts = st.session_state.time_list[st.session_state.current_time_index]
+            st.markdown(
+                f'<p style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
+                unsafe_allow_html=True
+            )
+
 # =============================
 # 8) OUTPUTS (STYLIZED BAR CHART)
 # =============================
@@ -469,5 +515,6 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
