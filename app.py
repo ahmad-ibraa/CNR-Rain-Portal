@@ -17,42 +17,57 @@ from matplotlib.colors import ListedColormap
 import rioxarray 
 
 # -----------------------------
-# 1. PAGE CONFIG & STABLE LAYOUT
+# 1. PAGE CONFIG & PERMANENT LAYOUT
 # -----------------------------
-st.set_page_config(layout="wide", page_title="CNR Radar Portal")
+st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
-    /* Force the app to fill the screen without scrolling */
-    .main .block-container {
-        padding: 0 !important;
-        max-width: 100% !important;
-        height: 100vh !important;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-    }
-
-    /* Force the Map to be the 'Bottom Layer' but full height */
+    /* 1. MAP: Force to true 100% background covering everything */
     .stPydeckChart {
-        flex-grow: 1 !important;
-        height: 95vh !important; 
-        width: 100% !important;
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: -1 !important;
     }
 
-    /* Floating Sidebar */
+    /* 2. SIDEBAR: Lock width, disable resize handle, and hide collapse button */
     [data-testid="stSidebar"] {
         min-width: 400px !important;
+        max-width: 400px !important;
+        width: 400px !important;
         background-color: #111 !important;
     }
+    
+    /* Disable the resize 'drag' bar */
+    [data-testid="stSidebarResizer"] {
+        display: none !important;
+    }
 
-    /* Floating Slider at Bottom */
+    /* Hide the 'X' button that allows hiding the sidebar */
+    button[title="Collapse sidebar"] {
+        display: none !important;
+    }
+
+    /* 3. MAIN CONTAINER: Make it transparent so the map shows through */
+    [data-testid="stAppViewContainer"] {
+        background-color: transparent !important;
+    }
+    
+    .main .block-container {
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+
+    /* 4. SLIDER: Floating at bottom */
     .stSlider {
         position: fixed !important;
         bottom: 20px !important;
-        left: 420px !important;
-        right: 40px !important;
-        z-index: 999;
+        left: 430px !important;
+        right: 30px !important;
+        z-index: 1000 !important;
         background: rgba(20, 20, 20, 0.9) !important;
         padding: 10px 30px !important;
         border-radius: 50px !important;
@@ -64,12 +79,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------
-# 2. STATE MANAGEMENT
+# 2. STATE & ENGINE
 # -----------------------------
 if 'radar_cache' not in st.session_state: st.session_state.radar_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
 if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
-# This stores multiple processed DataFrames keyed by Basin Name
 if 'basin_vault' not in st.session_state: st.session_state.basin_vault = {} 
 if 'map_view' not in st.session_state:
     st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
@@ -79,9 +93,6 @@ if "img_dir" not in st.session_state:
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
-# -----------------------------
-# 3. RADAR ENGINE
-# -----------------------------
 def get_radar_image(dt_utc):
     ts_str = dt_utc.strftime("%Y%m%d-%H%M00")
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
@@ -115,7 +126,7 @@ def get_radar_image(dt_utc):
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
 # -----------------------------
-# 4. SIDEBAR
+# 3. SIDEBAR (PERMANENT)
 # -----------------------------
 with st.sidebar:
     st.title("CNR GIS Portal")
@@ -156,18 +167,12 @@ with st.sidebar:
                     cache[ts.strftime("%H:%M")] = {"path": path, "bounds": bnds}
                     stats.append({"time": ts, "rain_in": val})
                 pb.progress((i + 1) / len(tr))
-            
-            st.session_state.radar_cache = cache
-            st.session_state.time_list = list(cache.keys())
-            # Save this specific run to the vault
+            st.session_state.radar_cache, st.session_state.time_list = cache, list(cache.keys())
             st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
 
-    # --- THE MULTI-FILE DOWNLOADER ---
     if st.session_state.basin_vault:
         st.write("---")
         st.subheader("📁 Processed Basins")
-        
-        # Select WHICH CSV file you want to interact with
         target_basin = st.selectbox("Select CSV to Download", options=list(st.session_state.basin_vault.keys()))
         df_target = st.session_state.basin_vault[target_basin]
         
@@ -182,7 +187,7 @@ with st.sidebar:
         st.download_button(f"DOWNLOAD {target_basin}.CSV", data=csv_data, file_name=f"{target_basin}.csv", use_container_width=True)
 
 # -----------------------------
-# 5. MAP RENDER
+# 4. MAP (LOCKED FULLSCREEN)
 # -----------------------------
 layers = []
 if st.session_state.time_list:
