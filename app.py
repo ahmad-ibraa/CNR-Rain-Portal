@@ -20,35 +20,50 @@ st.set_page_config(layout="wide", page_title="CNR Radar Portal")
 
 st.markdown("""
     <style>
-        /* 1. Remove all margins, headers, and footers */
-        .block-container { padding: 0rem !important; max-width: 100% !important; }
+        /* Force the app to use 100% of the browser width */
+        .block-container { 
+            padding: 0rem !important; 
+            max-width: 100vw !important; 
+        }
+        
+        /* Hide UI clutter */
         header, footer { display: none !important; }
         
-        /* 2. Force the Map to 92% of the window height */
-        /* This ensures it fills the page while leaving a tiny sliver for the slider */
-        [data-testid="stPydeckChart"], iframe {
-            height: 92vh !important;
+        /* Force the Map to fill the screen */
+        div[data-testid="stPydeckChart"], iframe {
+            height: 100vh !important;
             width: 100vw !important;
+            position: fixed !important;
+            top: 0;
+            left: 0;
         }
 
-        /* 3. Style the "Show Plot" button to be wide and clean */
+        /* Float the slider at the bottom so it doesn't push the map up */
+        .stSlider {
+            position: fixed;
+            bottom: 30px;
+            left: 320px; /* Offset for sidebar */
+            right: 50px;
+            z-index: 1000;
+            background: rgba(25, 25, 25, 0.8);
+            padding: 10px 25px;
+            border-radius: 15px;
+            border: 1px solid #444;
+        }
+
+        /* Style the Sidebar Button to be a large, wide rectangle */
         div.stButton > button {
             width: 100% !important;
-            height: 50px !important;
+            height: 60px !important;
+            font-size: 18px !important;
             font-weight: bold !important;
-            text-transform: uppercase;
+            margin-top: 10px;
         }
 
-        /* 4. Fix the slider position so it sits on top of the map bottom */
-        .stSlider {
-            position: absolute;
-            bottom: 20px;
-            left: 5%;
-            right: 5%;
-            z-index: 999;
-            background: rgba(0,0,0,0.5);
-            padding: 10px 20px;
-            border-radius: 10px;
+        /* Make the Dialog (Graph) much larger */
+        div[data-testid="stDialog"] div[role="dialog"] {
+            width: 80vw !important;
+            max-width: 1200px !important;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -64,7 +79,7 @@ if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
 if 'map_view' not in st.session_state: 
     st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 
-# --- 3. DATA ENGINE ---
+# --- 3. DATA ENGINE (15-min) ---
 def get_radar_image(dt_utc):
     ts_str = dt_utc.strftime("%Y%m%d-%H%M00") 
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
@@ -143,21 +158,20 @@ with st.sidebar:
             st.session_state.time_list = list(cache.keys())
             st.session_state.processed_df = pd.DataFrame(stats)
 
-    # WIDE "SHOW PLOT" BUTTON
     if st.session_state.processed_df is not None:
         st.write("---")
         if st.button("SHOW PLOT", type="primary"):
             import plotly.express as px
-            @st.dialog("Rainfall Statistics")
+            @st.dialog("Rainfall Statistics", width="large")
             def modal():
                 fig = px.bar(st.session_state.processed_df, x='time', y='rain_in', template="plotly_dark")
-                fig.update_layout(bargap=0, margin=dict(l=0, r=0, t=0, b=0))
+                fig.update_layout(bargap=0, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
             modal()
 
 # --- 5. MAIN MAP ---
 if st.session_state.time_list:
-    # Use a slider that is positioned via CSS to avoid pushing the map
+    # Floating Slider (Positioned via CSS)
     t_idx = st.select_slider("Select Time", options=range(len(st.session_state.time_list)),
                              format_func=lambda x: st.session_state.time_list[x], label_visibility="collapsed")
     
@@ -167,20 +181,15 @@ if st.session_state.time_list:
         pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                   stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3)
     ]
-    
-    # We use st.pydeck_chart. By keeping the Deck() configuration stable, we minimize flickering.
-    st.pydeck_chart(pdk.Deck(
-        layers=layers, 
-        initial_view_state=st.session_state.map_view, 
-        map_style="dark",
-    ))
 else:
     layers = []
     if st.session_state.active_gdf is not None:
         layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                                 stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
-    st.pydeck_chart(pdk.Deck(
-        layers=layers, 
-        initial_view_state=st.session_state.map_view, 
-        map_style="dark"
-    ))
+
+# Using a constant 'key' in st.pydeck_chart is the secret to stopping the flickering/resetting
+st.pydeck_chart(pdk.Deck(
+    layers=layers, 
+    initial_view_state=st.session_state.map_view, 
+    map_style="dark",
+), key="radar_map")
