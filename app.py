@@ -179,17 +179,53 @@ def csv_download_link(df: pd.DataFrame, filename: str, label: str):
         unsafe_allow_html=True,
     )
 
-def normalize_grid(da: xr.DataArray) -> xr.DataArray:
-    keep = {"latitude", "longitude"}
-    drop = [c for c in da.coords if c not in keep]
-    da = da.drop_vars(drop, errors="ignore")
-    for d in list(da.dims):
-        if d not in ("latitude", "longitude"):
-            da = da.squeeze(d, drop=True)
+def normalize_to_latlon(da: xr.DataArray) -> xr.DataArray:
+    """
+    Force a single 2D raster: (latitude, longitude)
+    by selecting index 0 for any extra dimension (e.g., step, surface, etc.)
+    """
+    if da is None:
+        return None
 
-    # Ensure coords are 1D and sorted
+    # Drop annoying scalar coords that cause concat issues
+    drop_coords = [c for c in da.coords if c not in ("latitude", "longitude")]
+    da = da.drop_vars(drop_coords, errors="ignore")
+
+    # Reduce extra dims to a single slice (DON'T squeeze unless len==1)
+    allowed = {"latitude", "longitude"}
+    for d in list(da.dims):
+        if d in allowed:
+            continue
+        # pick the first slice deterministically
+        da = da.isel({d: 0})
+
+    # Ensure proper ordering
     da = da.sortby("latitude", ascending=False).sortby("longitude")
     return da
+
+
+def normalize_to_tlatlon(da: xr.DataArray) -> xr.DataArray:
+    """
+    Force a 3D array: (time, latitude, longitude)
+    selecting index 0 for any extra dims beyond (time, lat, lon).
+    """
+    if da is None:
+        return None
+
+    # Drop non-lat/lon/time coords
+    drop_coords = [c for c in da.coords if c not in ("time", "latitude", "longitude")]
+    da = da.drop_vars(drop_coords, errors="ignore")
+
+    allowed = {"time", "latitude", "longitude"}
+    for d in list(da.dims):
+        if d in allowed:
+            continue
+        da = da.isel({d: 0})
+
+    # Ensure proper ordering
+    da = da.sortby("latitude", ascending=False).sortby("longitude")
+    return da
+
 
 def ensure_unique_sorted_1d(coord: np.ndarray, descending: bool = False) -> np.ndarray:
     """
@@ -238,26 +274,30 @@ def align_ro_to_mrms_grid_nearest(ro: xr.DataArray, mrms0: xr.DataArray) -> xr.D
     Robust grid alignment without interp_like:
     - nearest-neighbor index mapping for lat/lon
     - preserves time dimension of RO
+    - returns RO aligned to MRMS grid: (time, latitude, longitude)
     """
-    ro = normalize_grid(ro)
-    mrms0 = normalize_grid(mrms0)
+    # Normalize shapes safely (NO squeeze)
+    ro = normalize_to_tlatlon(ro)
+    mrms0 = normalize_to_latlon(mrms0)
+
+    # Validate dims
+    if ro.ndim != 3 or ro.dims[0] != "time":
+        raise ValueError(f"RO must be (time, latitude, longitude). Got dims={ro.dims}")
+    if mrms0.ndim != 2:
+        raise ValueError(f"mrms0 must be (latitude, longitude). Got dims={mrms0.dims}")
 
     ro_lat = np.asarray(ro.latitude.values, dtype="float64")
     ro_lon = np.asarray(ro.longitude.values, dtype="float64")
     mr_lat = np.asarray(mrms0.latitude.values, dtype="float64")
     mr_lon = np.asarray(mrms0.longitude.values, dtype="float64")
 
-    # Ensure monotonic unique coords (defensive)
-    # We do NOT resample ro here; we just index-map to MRMS coords.
-    lat_idx = nearest_index(ro_lat, mr_lat)
-    lon_idx = nearest_index(ro_lon, mr_lon)
+    # Build nearest index mapping RO->MRMS coordinates
+    lat_idx = nearest_index(ro_lat, mr_lat)   # shape (len(mr_lat),)
+    lon_idx = nearest_index(ro_lon, mr_lon)   # shape (len(mr_lon),)
 
-    # advanced indexing -> returns (time, mr_lat, mr_lon)
-    data = ro.values.astype("float32")  # (time, lat, lon) expected
-    if ro.ndim != 3 or ro.dims[0] != "time":
-        # Ensure we have a time dimension first
-        raise ValueError(f"RO must be (time, latitude, longitude). Got dims={ro.dims}")
+    data = ro.values.astype("float32")  # (time, ro_lat, ro_lon)
 
+    # Advanced indexing -> (time, mr_lat, mr_lon)
     aligned = data[:, lat_idx[:, None], lon_idx[None, :]]
 
     out = xr.DataArray(
@@ -269,8 +309,10 @@ def align_ro_to_mrms_grid_nearest(ro: xr.DataArray, mrms0: xr.DataArray) -> xr.D
             "longitude": mr_lon,
         },
         name=getattr(ro, "name", "ro_aligned"),
+        attrs=getattr(ro, "attrs", {}).copy(),
     )
     return out
+
 
 def local_naive_to_utc(dt_local_naive: datetime) -> datetime:
     aware_local = dt_local_naive.replace(tzinfo=NY_TZ)
@@ -313,7 +355,7 @@ def load_precip(file_type: str, dt_local_naive: datetime) -> xr.DataArray | None
 
         da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
         da = da.rio.write_crs("EPSG:4326")
-        da = normalize_grid(da)
+        da = normalize_to_latlon(da)
         return da
     finally:
         try:
@@ -429,23 +471,38 @@ with st.sidebar:
             # 2) Download MRMS (NO CLIP)
             mrms_list, mrms_kept = [], []
             for j, t in enumerate(mrms_times):
-                msg.info(f"MRMS 1-hr → {j+1}/{len(mrms_times)} • {t:%Y-%m-%d %H:%M} (NY local)")
-                da = load_precip("MRMS", pd.Timestamp(t).to_pydatetime())
-                step_i += 1; pb.progress(min(1.0, step_i/total_steps))
+                t_py = pd.Timestamp(t).to_pydatetime()
+                msg.info(f"MRMS 1-hr → {j+1}/{len(mrms_times)} • {t_py:%Y-%m-%d %H:%M} (NY local)")
+            
+                da = load_precip("MRMS", t_py)
+                step_i += 1
+                pb.progress(min(1.0, step_i / total_steps))
+            
                 if da is None:
                     continue
-                mrms_list.append(da.astype("float32"))
-                mrms_kept.append(pd.Timestamp(t).to_pydatetime())
-
+            
+                # da should already be (lat, lon) from load_precip(); this is just defensive
+                da = normalize_to_latlon(da).astype("float32")
+                mrms_list.append(da)
+                mrms_kept.append(t_py)
+            
             if len(mrms_list) == 0:
                 raise RuntimeError("No MRMS hourly frames found for the aligned window.")
-
-            mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
-
-            # 3) Align RO grid to MRMS grid (ROBUST nearest index mapping)
+            
+            # concat -> (time, lat, lon)
+            mrms = xr.concat(mrms_list, dim="time")
+            mrms = mrms.assign_coords(time=mrms_kept)
+            mrms = normalize_to_tlatlon(mrms).astype("float32")
+            
+            # RO must already exist by here, and be (time, lat, lon)
+            ro = normalize_to_tlatlon(ro).astype("float32")
+            
             msg.info("Aligning RO grid to MRMS grid…")
             ro = align_ro_to_mrms_grid_nearest(ro, mrms.isel(time=0))
-            step_i += 5; pb.progress(min(1.0, step_i/total_steps))
+            
+            step_i += 5
+            pb.progress(min(1.0, step_i / total_steps))
+
 
             # 4) RO hourly sums aligned to MRMS (must have 4 frames)
             msg.info("Computing RO hourly sums aligned to MRMS…")
@@ -620,3 +677,4 @@ if st.session_state.time_list:
         st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
