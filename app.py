@@ -85,7 +85,7 @@ button[title="Collapse sidebar"]{
   margin:0 !important;
   padding:0 !important;
   transform:none !important;
-  z-index: 1 !important;
+  z-index: 0 !important;
 }
 #view-default-view,
 #view-default-view > div,
@@ -426,14 +426,17 @@ st.pydeck_chart(pdk.Deck(
 # 7) FLOATING CONTROLS (The Slider)
 # =============================
 if st.session_state.time_list:
+    # Use a container to wrap the markdown and columns for better z-index handling
     st.markdown('<div class="control-bar">', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 10, 2])
+    
+    # Increase the ratio for c2 to give the slider more horizontal room
+    c1, c2, c3 = st.columns([1, 12, 3]) 
+    
     with c1:
         if st.button("⏸" if st.session_state.is_playing else "▶", key="play_btn"):
             st.session_state.is_playing = not st.session_state.is_playing
             st.rerun()
     with c2:
-        # Fixed Slider logic
         idx = st.select_slider(
             "Timeline", 
             options=list(range(len(st.session_state.time_list))), 
@@ -444,33 +447,45 @@ if st.session_state.time_list:
         )
         if idx != st.session_state.current_time_index:
             st.session_state.current_time_index = idx
-            st.session_state.is_playing = False # Stop playing if user drags slider
+            st.session_state.is_playing = False
             st.rerun()
     with c3: 
-        st.markdown(f'<p style="color:white; margin-top:10px;"><b>{st.session_state.time_list[st.session_state.current_time_index]}</b></p>', unsafe_allow_html=True)
+        # Added a specific class or style to ensure text is visible on the dark bar
+        st.markdown(f'<p style="color:white; margin:0; line-height:44px; font-size:14px; white-space:nowrap;"><b>{st.session_state.time_list[st.session_state.current_time_index]}</b></p>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================
-# 8) OUTPUTS (Plot & Downloads)
+# 8) OUTPUTS (Bar Chart & Downloads)
 # =============================
-# These appear in the sidebar under the processing button
 with st.sidebar:
     if st.session_state.basin_vault:
         st.divider()
         st.subheader("Data Analysis")
         
-        # Get the dataframe for the current basin
         current_basin_df = st.session_state.basin_vault[basin_name]
         
-        # --- SHOW PLOT ---
+        # --- SHOW BAR PLOT ---
         fig, ax = plt.subplots(figsize=(5, 3))
-        ax.plot(current_basin_df["time"], current_basin_df["rain_in"], color="#01a0fe", lw=2)
-        ax.set_ylabel("Avg Rain (in)")
-        ax.set_title(f"Rainfall: {basin_name}")
+        # Use ax.bar instead of ax.plot
+        ax.bar(
+            current_basin_df["time"], 
+            current_basin_df["rain_in"], 
+            color="#01a0fe", 
+            width=0.008  # Adjust width based on time frequency (0.01 is ~15 mins)
+        )
+        
+        ax.set_ylabel("Avg Rain (in)", color="white")
+        ax.set_title(f"Rainfall: {basin_name}", color="white")
+        
+        # Style the plot for Dark Mode
+        ax.set_facecolor('#111')
+        fig.patch.set_facecolor('#111')
+        ax.tick_params(colors='white')
+        for spine in ax.spines.values():
+            spine.set_color('white')
+            
         plt.xticks(rotation=45)
         st.pyplot(fig)
         
-        # --- DOWNLOADS ---
         st.write("### Exports")
         csv_download_link(current_basin_df, f"{basin_name}_rainfall.csv", f"Download {basin_name} CSV")
-
