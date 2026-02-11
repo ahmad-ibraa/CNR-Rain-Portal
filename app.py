@@ -266,6 +266,15 @@ def load_precip(file_type: str, dt_local: datetime) -> xr.DataArray | None:
             os.remove(tmp_path)
         except Exception:
             pass
+def subset_to_bbox(da: xr.DataArray, bounds) -> xr.DataArray:
+    minx, miny, maxx, maxy = bounds
+    # latitude is usually descending in MRMS; handle both
+    lat = da.latitude
+    if float(lat[0]) > float(lat[-1]):
+        da = da.sel(latitude=slice(maxy, miny), longitude=slice(minx, maxx))
+    else:
+        da = da.sel(latitude=slice(miny, maxy), longitude=slice(minx, maxx))
+    return da
 
 def save_frame_png(da: xr.DataArray, dt_local: datetime) -> tuple[str, list]:
     data = da.values.astype("float32")
@@ -298,6 +307,8 @@ with st.sidebar:
 
     up_zip = st.file_uploader("Watershed Boundary (ZIP)", type="zip")
     basin_name = "Default_Basin"
+    if "ws_bounds" not in st.session_state:
+        st.session_state.ws_bounds = None
 
     if up_zip:
         basin_name = up_zip.name.replace(".zip", "")
@@ -307,6 +318,7 @@ with st.sidebar:
             shps = list(Path(td).rglob("*.shp"))
             if shps:
                 st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
+                st.session_state.ws_bounds = st.session_state.active_gdf.to_crs("EPSG:4326").total_bounds
                 b = st.session_state.active_gdf.total_bounds
                 st.session_state.map_view = pdk.ViewState(
                     latitude=(b[1] + b[3]) / 2,
@@ -352,6 +364,18 @@ with st.sidebar:
             for i, t in enumerate(ro_times):
                 msg.info(f"RadarOnly 15-min → downloading {i+1}/{len(ro_times)} • {t:%Y-%m-%d %H:%M}")
                 da = load_precip("RO", t)
+                da = normalize_grid(da)
+                da = subset_to_bbox(da, st.session_state.ws_bounds)
+                
+                # keep a consistent rectangle grid (same shape every time)
+                # then clip with drop=False so shape stays constant
+                sub = da.rio.write_crs("EPSG:4326", inplace=False)
+                clipped = sub.rio.clip(
+                    st.session_state.active_gdf.geometry,
+                    st.session_state.active_gdf.crs,
+                    drop=False
+                ).fillna(0).astype("float32")
+
                 step_i += 1; pb.progress(min(1.0, step_i/total_steps))
                 if da is None:
                     continue
@@ -373,6 +397,18 @@ with st.sidebar:
             for j, t in enumerate(mrms_times):
                 msg.info(f"MRMS 1-hr → downloading {j+1}/{len(mrms_times)} • {t:%Y-%m-%d %H:%M}")
                 da = load_precip("MRMS", t)
+                da = normalize_grid(da)
+                da = subset_to_bbox(da, st.session_state.ws_bounds)
+                
+                # keep a consistent rectangle grid (same shape every time)
+                # then clip with drop=False so shape stays constant
+                sub = da.rio.write_crs("EPSG:4326", inplace=False)
+                clipped = sub.rio.clip(
+                    st.session_state.active_gdf.geometry,
+                    st.session_state.active_gdf.crs,
+                    drop=False
+                ).fillna(0).astype("float32")
+
                 step_i += 1; pb.progress(min(1.0, step_i/total_steps))
                 if da is None:
                     continue
@@ -389,50 +425,61 @@ with st.sidebar:
 
             mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
 
-            # ---------- 3) Force RO grid to match MRMS grid (prevents scaling crashes) ----------
             msg.info("Aligning RO grid to MRMS grid…")
-            ro = ro.interp_like(mrms.isel(time=0))  # <-- THIS is where it belongs
-            step_i += 3; pb.progress(min(1.0, step_i/total_steps))
+            
+            # Force RO spatial grid to match MRMS
+            ro = ro.interp_like(mrms.isel(time=0), method="nearest")
+            
+            ro = ro.astype("float32")
+            mrms = mrms.astype("float32")
+            
+            step_i += 3
+            pb.progress(min(1.0, step_i/total_steps))
+
 
             # ---------- 4) Build RO hourly sums aligned to MRMS (skip incomplete 4-frame hours) ----------
             msg.info("Computing RO hourly sums aligned to MRMS (requires 4 frames/hour)…")
             ro_hourly = []
-            valid_mrms_times = []
-
+            valid_times = []
+            
             for T in mrms.time.values:
                 Tdt = pd.to_datetime(str(T)).to_pydatetime()
                 block = ro.sel(time=slice(Tdt - timedelta(minutes=45), Tdt))
-
+            
                 if block.sizes.get("time", 0) != 4:
-                    continue  # missing frames => cannot scale this hour safely
-
-                ro_hourly.append(block.sum(dim="time"))
-                valid_mrms_times.append(Tdt)
-
-            if len(ro_hourly) == 0:
+                    continue
+            
+                ro_hourly.append(block.sum(dim="time").astype("float32"))
+                valid_times.append(Tdt)
+            
+            if not valid_times:
                 raise RuntimeError("No MRMS hours had a complete 4-frame RO block to scale.")
+            
+            mrms = mrms.sel(time=pd.to_datetime(valid_times))
+            ro_hourly_da = xr.concat(ro_hourly, dim="time").assign_coords(time=pd.to_datetime(valid_times))
 
-            # keep only hours we can scale
-            mrms = mrms.sel(time=valid_mrms_times)
-            ro_hourly_da = xr.concat(ro_hourly, dim="time").assign_coords(time=valid_mrms_times)
             step_i += 5; pb.progress(min(1.0, step_i/total_steps))
 
             # ---------- 5) Cell-wise scaling rasters per hour: MRMS / RO_hourly ----------
             msg.info("Computing hourly scaling rasters (MRMS / RO_hourly)…")
             ratio_list = []
-            eps = 0.01  # mm threshold to avoid divide-by-tiny
+            eps = 0.01  # mm
+            ratio_list = []
             for i in range(len(mrms.time)):
                 mrms_slice = mrms.isel(time=i)
                 ro_slice   = ro_hourly_da.isel(time=i)
-
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    ratio = xr.where(ro_slice > eps, mrms_slice / ro_slice, 0.0)
-                    ratio = ratio.where(np.isfinite(ratio), 0.0)
-                    ratio = ratio.clip(min=0.0, max=50.0)  # cap spikes
-
+            
+                # guarantee same grid (defensive)
+                ro_slice = ro_slice.interp_like(mrms_slice)
+            
+                ratio = xr.where(ro_slice > eps, mrms_slice / ro_slice, 0.0)
+                ratio = ratio.where(np.isfinite(ratio), 0.0)
+                ratio = ratio.clip(min=0.0, max=50.0).astype("float32")  # cap spikes
+            
                 ratio_list.append(ratio)
-
+            
             scaling_da = xr.concat(ratio_list, dim="time").assign_coords(time=mrms.time.values)
+
             step_i += 8; pb.progress(min(1.0, step_i/total_steps))
 
             # ---------- 6) Scale each RO 15-min frame using the correct MRMS hour-end bin ----------
@@ -587,3 +634,4 @@ if st.session_state.time_list:
 
         with c3:
             st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
+
