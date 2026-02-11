@@ -19,6 +19,13 @@ import rioxarray
 import time
 import base64
 from zoneinfo import ZoneInfo
+import folium
+from folium import FeatureGroup
+from streamlit_folium import st_folium
+from functools import lru_cache
+from folium.features import GeoJsonTooltip
+from folium import Map
+from streamlit_folium import st_folium
 
 UTC_TZ = ZoneInfo("UTC")
 
@@ -256,6 +263,11 @@ defaults = {
     "current_time_index": 0,
     "processing_msg": "",
     "tz_name": "America/New_York",   # default selection
+    "selected_munis": [],          # list of GNIS_NAME strings
+    "show_munis": True,            # toggle default
+    "search_query": "",            # city search text
+    "mode": "select",   # "select" (folium) or "view" (pydeck)
+
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -274,6 +286,74 @@ RO_S3_BASE   = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_0
 # =============================
 # 4) HELPERS
 # =============================
+MUNI_GEOJSON_PATH = "data/nj_municipalities.geojson"  # <-- change to your actual repo path
+MUNI_NAME_FIELD = "GNIS_NAME"
+@st.cache_data(show_spinner=False)
+
+
+def render_muni_picker_map(muni_geojson: dict, center=(40.1, -74.6), zoom=8):
+    m = folium.Map(location=center, zoom_start=zoom, tiles="CartoDB dark_matter")
+
+    # Base municipalities layer (clickable)
+    muni_layer = folium.GeoJson(
+        muni_geojson,
+        name="NJ Municipalities",
+        style_function=lambda feat: {
+            "color": "#ffffff",
+            "weight": 1,
+            "fillColor": "#000000",
+            "fillOpacity": 0.00,
+        },
+        highlight_function=lambda feat: {
+            "weight": 3,
+            "color": "#01a0fe",
+            "fillOpacity": 0.10,
+        },
+        tooltip=GeoJsonTooltip(fields=[MUNI_NAME_FIELD], aliases=["Municipality:"]),
+    )
+    muni_layer.add_to(m)
+
+    folium.LayerControl(collapsed=True).add_to(m)
+
+    # Render to Streamlit and capture click
+    out = st_folium(m, width=None, height=950, returned_objects=["last_clicked"])
+    clicked = out.get("last_clicked")
+    if clicked:
+        props = clicked.get("properties", {})
+        name = props.get(MUNI_NAME_FIELD)
+
+
+    # Streamlit-Folium click capture: usually geometry is returned under last_active_drawing,
+    # and properties are accessible depending on version/build.
+    lad = out.get("last_active_drawing")
+    if lad and isinstance(lad, dict):
+        props = lad.get("properties") or {}
+        name = props.get(MUNI_NAME_FIELD)
+
+        if name and name not in st.session_state.selected_munis:
+            st.session_state.selected_munis.append(name)
+            st.session_state.active_gdf
+            st.rerun()
+
+def load_munis_geojson(path: str) -> dict:
+    # Load raw GeoJSON as dict (folium uses it directly)
+    import json
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+        
+@st.cache_data(show_spinner=False, ttl=24*3600)
+def geocode_place(query: str):
+    # Nominatim requires a User-Agent
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {"q": query, "format": "json", "limit": 1}
+    headers = {"User-Agent": "cnr-rainfall-streamlit/1.0 (contact: you@example.com)"}
+    r = requests.get(url, params=params, headers=headers, timeout=15)
+    r.raise_for_status()
+    js = r.json()
+    if not js:
+        return None
+    return float(js[0]["lat"]), float(js[0]["lon"])
+
 def csv_download_link(df: pd.DataFrame, filename: str, label: str):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     b64 = base64.b64encode(csv_bytes).decode()
@@ -400,6 +480,35 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
 # =============================
 with st.sidebar:
     st.title("CNR GIS Portal")
+    st.divider()
+    st.subheader("Map Layers")
+
+    st.session_state.show_munis = st.checkbox("Show NJ Municipalities", value=st.session_state.show_munis)
+
+    st.caption("Click a municipality on the map to select it.")
+    if st.session_state.selected_munis:
+        st.write("Selected municipalities:")
+        st.write(st.session_state.selected_munis)
+
+        if st.button("Clear selected municipalities"):
+            st.session_state.selected_munis = []
+            st.rerun()
+
+    st.divider()
+    st.subheader("Search (Zoom to place)")
+    q = st.text_input("City / place", value=st.session_state.search_query, placeholder="e.g., Newark, NJ")
+    st.session_state.search_query = q
+
+    if st.button("Zoom"):
+        if q.strip():
+            hit = geocode_place(q.strip())
+            if hit is None:
+                st.warning("No results found.")
+            else:
+                lat, lon = hit
+                # store as your view center
+                st.session_state.map_view = pdk.ViewState(latitude=lat, longitude=lon, zoom=11)
+                st.rerun()
     tz_label = st.selectbox(
         "Time Zone",
         list(TZ_OPTIONS.keys()),
@@ -533,61 +642,72 @@ with st.sidebar:
             st.session_state.current_time_index = 0
             st.session_state.radar_cache = cache
             st.session_state.time_list = sorted(cache.keys())
-            st.session_state.time_list = sorted(cache.keys())
             st.session_state.current_time_label = st.session_state.time_list[0] if st.session_state.time_list else None
             st.session_state.current_time_index = 0
             st.session_state.is_playing = False
             st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
+            st.session_state.mode = "view"
             msg.success("Complete."); st.rerun()
         except Exception as e:
             st.error(f"Error: {e}"); st.exception(e); st.stop()
 
 # =============================
-# 6) ANIMATION & MAIN DISPLAY
+# 6) MAIN DISPLAY
 # =============================
-if st.session_state.is_playing:
-    n = len(st.session_state.time_list)
-    if n > 0:
-        st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
-        time.sleep(0.5)
-        st.rerun()
 
+# ---- A) Folium municipality picker (BEFORE processing) ----
+if st.session_state.mode == "select":
+    st.markdown("### Municipality selection (click a polygon)")
+    if st.session_state.show_munis:
+        muni_geojson = load_munis_geojson(MUNI_GEOJSON_PATH)
 
-# --- MAP DISPLAY ---
-layers = []
+        # pick a sensible center: use watershed if uploaded, else NJ-ish
+        if st.session_state.active_gdf is not None:
+            b = st.session_state.active_gdf.total_bounds
+            center = ((b[1] + b[3]) / 2, (b[0] + b[2]) / 2)
+            zoom = 10
+        else:
+            center = (40.1, -74.6)
+            zoom = 8
 
-if st.session_state.time_list and st.session_state.current_time_label:
-    # safety: if label disappeared, fall back
-    if st.session_state.current_time_label not in st.session_state.time_list:
-        st.session_state.current_time_label = st.session_state.time_list[0]
+        render_muni_picker_map(muni_geojson, center=center, zoom=zoom)
+    else:
+        st.info("Enable 'Show NJ Municipalities' to pick by click.")
 
-    curr = st.session_state.radar_cache[st.session_state.current_time_label]
-    layers.append(pdk.Layer(
-        "BitmapLayer",
-        image=curr["path"],
-        bounds=curr["bounds"],
-        opacity=0.70
-    ))
+# ---- B) PyDeck radar viewer (AFTER processing) ----
+else:
+    layers = []
 
-if st.session_state.active_gdf is not None:
-    layers.append(pdk.Layer(
-        "GeoJsonLayer",
-        st.session_state.active_gdf.__geo_interface__,
-        stroked=True,
-        filled=False,
-        get_line_color=[255, 255, 255],
-        line_width_min_pixels=3
-    ))
+    if st.session_state.time_list and st.session_state.current_time_label:
+        if st.session_state.current_time_label not in st.session_state.time_list:
+            st.session_state.current_time_label = st.session_state.time_list[0]
 
-deck = pdk.Deck(
-    layers=layers,
-    initial_view_state=st.session_state.map_view,
-    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-)
+        curr = st.session_state.radar_cache[st.session_state.current_time_label]
+        layers.append(pdk.Layer(
+            "BitmapLayer",
+            image=curr["path"],
+            bounds=curr["bounds"],
+            opacity=0.70
+        ))
 
-# IMPORTANT: force a re-mount when time changes
-deck_key = f"map_{st.session_state.current_time_label}"
-st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
+    if st.session_state.active_gdf is not None:
+        layers.append(pdk.Layer(
+            "GeoJsonLayer",
+            st.session_state.active_gdf.__geo_interface__,
+            stroked=True,
+            filled=False,
+            get_line_color=[255, 255, 255],
+            line_width_min_pixels=3
+        ))
+
+    deck = pdk.Deck(
+        layers=layers,
+        initial_view_state=st.session_state.map_view,
+        map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+    )
+
+    deck_key = f"map_{st.session_state.current_time_label}"
+    st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
 
 
 # =============================
@@ -595,7 +715,7 @@ st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
 # =============================
 import streamlit.components.v1 as components
 
-if st.session_state.time_list:
+if st.session_state.mode == "view" and st.session_state.time_list:
     with st.container():
         st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
 
@@ -667,16 +787,3 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
-
-
-
-
-
-
-
-
-
-
-
-
-
