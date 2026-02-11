@@ -15,12 +15,53 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import rioxarray 
-import time
 
 # -----------------------------
-# 1. PAGE CONFIG
+# 1. PAGE CONFIG & STABLE LAYOUT
 # -----------------------------
 st.set_page_config(layout="wide", page_title="CNR Radar Portal")
+
+st.markdown("""
+<style>
+    /* Force the app to fill the screen without scrolling */
+    .main .block-container {
+        padding: 0 !important;
+        max-width: 100% !important;
+        height: 100vh !important;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    /* Force the Map to be the 'Bottom Layer' but full height */
+    .stPydeckChart {
+        flex-grow: 1 !important;
+        height: 95vh !important; 
+        width: 100% !important;
+    }
+
+    /* Floating Sidebar */
+    [data-testid="stSidebar"] {
+        min-width: 400px !important;
+        background-color: #111 !important;
+    }
+
+    /* Floating Slider at Bottom */
+    .stSlider {
+        position: fixed !important;
+        bottom: 20px !important;
+        left: 420px !important;
+        right: 40px !important;
+        z-index: 999;
+        background: rgba(20, 20, 20, 0.9) !important;
+        padding: 10px 30px !important;
+        border-radius: 50px !important;
+        border: 1px solid #333;
+    }
+
+    header, footer { visibility: hidden !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # -----------------------------
 # 2. STATE MANAGEMENT
@@ -28,15 +69,12 @@ st.set_page_config(layout="wide", page_title="CNR Radar Portal")
 if 'radar_cache' not in st.session_state: st.session_state.radar_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
 if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
+# This stores multiple processed DataFrames keyed by Basin Name
 if 'basin_vault' not in st.session_state: st.session_state.basin_vault = {} 
 if 'map_view' not in st.session_state:
     st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 if "img_dir" not in st.session_state:
     st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
-if 'is_playing' not in st.session_state:
-    st.session_state.is_playing = False
-if 'current_time_index' not in st.session_state:
-    st.session_state.current_time_index = 0
 
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
@@ -77,80 +115,7 @@ def get_radar_image(dt_utc):
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
 # -----------------------------
-# 4. CUSTOM CSS
-# -----------------------------
-st.markdown("""
-<style>
-    /* Make main container fullscreen */
-    .main .block-container {
-        padding-top: 0 !important;
-        padding-bottom: 0 !important;
-        padding-left: 0 !important;
-        padding-right: 0 !important;
-        max-width: 100% !important;
-    }
-
-    /* Make map fullscreen */
-    iframe[title="streamlit_pydeck.pydeck_chart"] {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100vw !important;
-        height: 100vh !important;
-        z-index: 0 !important;
-    }
-
-    /* Sidebar overlay - always show toggle button */
-    [data-testid="stSidebar"] {
-        z-index: 999 !important;
-        background-color: rgba(17, 17, 17, 0.95) !important;
-        backdrop-filter: blur(10px);
-    }
-    
-    /* Keep sidebar toggle button visible */
-    [data-testid="collapsedControl"] {
-        z-index: 1000 !important;
-        position: fixed !important;
-        left: 0 !important;
-        top: 0 !important;
-    }
-
-    /* Style play/pause buttons as circular */
-    .stButton button {
-        border-radius: 50% !important;
-        width: 50px !important;
-        height: 50px !important;
-        padding: 0 !important;
-        font-size: 24px !important;
-        line-height: 1 !important;
-    }
-
-    /* Hide header and footer */
-    header, footer {visibility: hidden;}
-    
-    /* Position controls at bottom - using last horizontal block */
-    .main .block-container > div:last-child div[data-testid="stHorizontalBlock"] {
-        position: fixed !important;
-        bottom: 20px !important;
-        left: 420px !important;
-        right: 40px !important;
-        z-index: 998 !important;
-        background: rgba(20, 20, 20, 0.95) !important;
-        padding: 15px 30px !important;
-        border-radius: 50px !important;
-        border: 1px solid #333 !important;
-        backdrop-filter: blur(10px) !important;
-    }
-    
-    /* Adjust when sidebar is collapsed */
-    [data-testid="stSidebar"][aria-expanded="false"] ~ .main .block-container > div:last-child div[data-testid="stHorizontalBlock"] {
-        left: 20px !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# -----------------------------
-# 5. SIDEBAR
+# 4. SIDEBAR
 # -----------------------------
 with st.sidebar:
     st.title("CNR GIS Portal")
@@ -194,13 +159,15 @@ with st.sidebar:
             
             st.session_state.radar_cache = cache
             st.session_state.time_list = list(cache.keys())
-            st.session_state.current_time_index = 0
+            # Save this specific run to the vault
             st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
 
+    # --- THE MULTI-FILE DOWNLOADER ---
     if st.session_state.basin_vault:
         st.write("---")
         st.subheader("📁 Processed Basins")
         
+        # Select WHICH CSV file you want to interact with
         target_basin = st.selectbox("Select CSV to Download", options=list(st.session_state.basin_vault.keys()))
         df_target = st.session_state.basin_vault[target_basin]
         
@@ -215,70 +182,20 @@ with st.sidebar:
         st.download_button(f"DOWNLOAD {target_basin}.CSV", data=csv_data, file_name=f"{target_basin}.csv", use_container_width=True)
 
 # -----------------------------
-# 6. BUILD MAP LAYERS
+# 5. MAP RENDER
 # -----------------------------
 layers = []
-
-# Handle animation
-if st.session_state.time_list and st.session_state.is_playing:
-    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
-    time.sleep(0.5)
-    st.rerun()
-
-# Add radar layer if available
 if st.session_state.time_list:
-    current_time_str = st.session_state.time_list[st.session_state.current_time_index]
-    curr = st.session_state.radar_cache[current_time_str]
+    t_str = st.select_slider("", options=st.session_state.time_list, label_visibility="collapsed")
+    curr = st.session_state.radar_cache[t_str]
     layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7))
 
-# Add watershed boundary layer
 if st.session_state.active_gdf is not None:
-    layers.append(pdk.Layer(
-        "GeoJsonLayer",
-        st.session_state.active_gdf.__geo_interface__,
-        stroked=True,
-        filled=False,
-        get_line_color=[255, 255, 255],
-        line_width_min_pixels=3
-    ))
+    layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
+                            stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
-# -----------------------------
-# 7. RENDER MAP (FULLSCREEN)
-# -----------------------------
 st.pydeck_chart(pdk.Deck(
     layers=layers,
     initial_view_state=st.session_state.map_view,
     map_style="mapbox://styles/mapbox/dark-v11"
 ))
-
-# -----------------------------
-# 8. CONTROLS (BOTTOM OVERLAY)
-# -----------------------------
-if st.session_state.time_list:
-    col1, col2, col3 = st.columns([1, 12, 2])
-    
-    with col1:
-        if st.session_state.is_playing:
-            if st.button("⏸", key="pause_btn"):
-                st.session_state.is_playing = False
-                st.rerun()
-        else:
-            if st.button("▶", key="play_btn"):
-                st.session_state.is_playing = True
-                st.rerun()
-    
-    with col2:
-        selected_index = st.select_slider(
-            "Time",
-            options=range(len(st.session_state.time_list)),
-            value=st.session_state.current_time_index,
-            format_func=lambda x: st.session_state.time_list[x],
-            label_visibility="collapsed"
-        )
-        if selected_index != st.session_state.current_time_index:
-            st.session_state.current_time_index = selected_index
-            st.session_state.is_playing = False
-            st.rerun()
-    
-    with col3:
-        st.markdown(f"### {st.session_state.time_list[st.session_state.current_time_index]}")
