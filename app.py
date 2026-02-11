@@ -54,11 +54,9 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
   position:fixed !important;
   left:0 !important; top:0 !important;
   height:100vh !important;
-
   min-width:400px !important;
   max-width:400px !important;
   width:400px !important;
-
   background:rgba(17,17,17,0.95) !important;
   backdrop-filter: blur(10px);
   border-right:1px solid rgba(255,255,255,0.08);
@@ -75,35 +73,14 @@ button[title="Collapse sidebar"]{
   padding:10px 12px !important;
 }
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ gap:0.28rem !important; }
-[data-testid="stSidebar"] .block-container{ padding:0 !important; margin:0 !important; }
 
-/* DeckGL fullscreen, UNDER controls */
+/* DeckGL fullscreen */
 #deckgl-wrapper{
   position:fixed !important;
   inset:0 !important;
   width:100vw !important;
   height:100vh !important;
-  margin:0 !important;
-  padding:0 !important;
-  transform:none !important;
   z-index: 1 !important;
-}
-#view-default-view,
-#view-default-view > div,
-#view-default-view .mapboxgl-map,
-#view-default-view .mapboxgl-canvas-container,
-#view-default-view .overlays{
-  position:absolute !important;
-  inset:0 !important;
-  width:100% !important;
-  height:100% !important;
-}
-canvas#deckgl-overlay,
-canvas.mapboxgl-canvas{
-  position:absolute !important;
-  inset:0 !important;
-  width:100% !important;
-  height:100% !important;
 }
 
 /* Floating control bar */
@@ -113,35 +90,21 @@ canvas.mapboxgl-canvas{
   right: 18px !important;
   bottom: 18px !important;
   z-index: 12000 !important;
-
   background: rgba(15,15,15,0.92) !important;
   padding: 12px 16px !important;
   border-radius: 999px !important;
   border: 1px solid rgba(255,255,255,0.12) !important;
   backdrop-filter: blur(10px);
 }
-.control-bar *{ pointer-events: auto !important; }
 .control-bar .stButton button{
   border-radius:999px !important;
   width:44px !important;
   height:44px !important;
-  padding:0 !important;
-  font-size:18px !important;
 }
-
-/* Output links */
-.output-link a{
-  text-decoration:none !important;
-  font-weight:600 !important;
-}
-.output-link a:hover{ text-decoration:underline !important; }
-
-/* Sidebar buttons */
 [data-testid="stSidebar"] .stButton button{
   width:100% !important;
   border-radius:10px !important;
   height:44px !important;
-  font-weight:650 !important;
 }
 </style>
 """,
@@ -170,154 +133,63 @@ RO_S3_BASE   = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_0
 # =============================
 # 4) HELPERS
 # =============================
+def normalize_grid(da: xr.DataArray) -> xr.DataArray:
+    """Ensure coordinates are consistently float64 and sorted."""
+    da = da.assign_coords(
+        latitude=da.latitude.astype("float64"),
+        longitude=da.longitude.astype("float64")
+    )
+    return da.sortby("latitude", ascending=False).sortby("longitude")
+
 def csv_download_link(df: pd.DataFrame, filename: str, label: str):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     b64 = base64.b64encode(csv_bytes).decode()
     href = f"data:text/csv;base64,{b64}"
-    st.markdown(
-        f'<div class="output-link">📄 <a download="{filename}" href="{href}">{label}</a></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="output-link">📄 <a download="{filename}" href="{href}">{label}</a></div>', unsafe_allow_html=True)
 
 def normalize_to_latlon(da: xr.DataArray) -> xr.DataArray:
-    """
-    Force a single 2D raster: (latitude, longitude)
-    by selecting index 0 for any extra dimension (e.g., step, surface, etc.)
-    """
-    if da is None:
-        return None
-
-    # Drop annoying scalar coords that cause concat issues
+    if da is None: return None
     drop_coords = [c for c in da.coords if c not in ("latitude", "longitude")]
     da = da.drop_vars(drop_coords, errors="ignore")
-
-    # Reduce extra dims to a single slice (DON'T squeeze unless len==1)
     allowed = {"latitude", "longitude"}
     for d in list(da.dims):
-        if d in allowed:
-            continue
-        # pick the first slice deterministically
-        da = da.isel({d: 0})
-
-    # Ensure proper ordering
-    da = da.sortby("latitude", ascending=False).sortby("longitude")
-    return da
-
+        if d not in allowed: da = da.isel({d: 0})
+    return da.sortby("latitude", ascending=False).sortby("longitude")
 
 def normalize_to_tlatlon(da: xr.DataArray) -> xr.DataArray:
-    """
-    Force a 3D array: (time, latitude, longitude)
-    selecting index 0 for any extra dims beyond (time, lat, lon).
-    """
-    if da is None:
-        return None
-
-    # Drop non-lat/lon/time coords
+    if da is None: return None
     drop_coords = [c for c in da.coords if c not in ("time", "latitude", "longitude")]
     da = da.drop_vars(drop_coords, errors="ignore")
-
     allowed = {"time", "latitude", "longitude"}
     for d in list(da.dims):
-        if d in allowed:
-            continue
-        da = da.isel({d: 0})
-
-    # Ensure proper ordering
-    da = da.sortby("latitude", ascending=False).sortby("longitude")
-    return da
-
-
-def ensure_unique_sorted_1d(coord: np.ndarray, descending: bool = False) -> np.ndarray:
-    """
-    Make coordinate 1D, unique, monotonic.
-    If duplicates exist, keep first occurrence after sorting.
-    """
-    coord = np.asarray(coord).astype("float64")
-    order = np.argsort(coord)
-    coord_sorted = coord[order]
-    if descending:
-        coord_sorted = coord_sorted[::-1]
-
-    # unique while preserving sorted order
-    _, uniq_idx = np.unique(coord_sorted, return_index=True)
-    coord_uniq = coord_sorted[np.sort(uniq_idx)]
-    return coord_uniq
+        if d not in allowed: da = da.isel({d: 0})
+    return da.sortby("latitude", ascending=False).sortby("longitude")
 
 def nearest_index(src: np.ndarray, tgt: np.ndarray) -> np.ndarray:
-    """
-    Return indices into src for nearest neighbor of each tgt value.
-    src must be sorted ascending or descending; we handle both.
-    """
     src = np.asarray(src).astype("float64")
     tgt = np.asarray(tgt).astype("float64")
-
-    # if descending, flip for searchsorted then map back
     descending = src[0] > src[-1]
-    if descending:
-        src_work = src[::-1]
-    else:
-        src_work = src
-
+    src_work = src[::-1] if descending else src
     pos = np.searchsorted(src_work, tgt)
     pos = np.clip(pos, 1, len(src_work) - 1)
-    left = src_work[pos - 1]
-    right = src_work[pos]
+    left, right = src_work[pos - 1], src_work[pos]
     choose_right = (np.abs(tgt - right) < np.abs(tgt - left))
     idx = pos - 1 + choose_right.astype(int)
-
-    if descending:
-        idx = (len(src) - 1) - idx
-    return idx
+    return (len(src) - 1) - idx if descending else idx
 
 def align_ro_to_mrms_grid_nearest(ro: xr.DataArray, mrms0: xr.DataArray) -> xr.DataArray:
-    """
-    Robust grid alignment without interp_like:
-    - nearest-neighbor index mapping for lat/lon
-    - preserves time dimension of RO
-    - returns RO aligned to MRMS grid: (time, latitude, longitude)
-    """
-    # Normalize shapes safely (NO squeeze)
     ro = normalize_to_tlatlon(ro)
     mrms0 = normalize_to_latlon(mrms0)
-
-    # Validate dims
-    if ro.ndim != 3 or ro.dims[0] != "time":
-        raise ValueError(f"RO must be (time, latitude, longitude). Got dims={ro.dims}")
-    if mrms0.ndim != 2:
-        raise ValueError(f"mrms0 must be (latitude, longitude). Got dims={mrms0.dims}")
-
-    ro_lat = np.asarray(ro.latitude.values, dtype="float64")
-    ro_lon = np.asarray(ro.longitude.values, dtype="float64")
-    mr_lat = np.asarray(mrms0.latitude.values, dtype="float64")
-    mr_lon = np.asarray(mrms0.longitude.values, dtype="float64")
-
-    # Build nearest index mapping RO->MRMS coordinates
-    lat_idx = nearest_index(ro_lat, mr_lat)   # shape (len(mr_lat),)
-    lon_idx = nearest_index(ro_lon, mr_lon)   # shape (len(mr_lon),)
-
-    data = ro.values.astype("float32")  # (time, ro_lat, ro_lon)
-
-    # Advanced indexing -> (time, mr_lat, mr_lon)
-    aligned = data[:, lat_idx[:, None], lon_idx[None, :]]
-
-    out = xr.DataArray(
-        aligned,
-        dims=("time", "latitude", "longitude"),
-        coords={
-            "time": ro.time.values,
-            "latitude": mr_lat,
-            "longitude": mr_lon,
-        },
-        name=getattr(ro, "name", "ro_aligned"),
-        attrs=getattr(ro, "attrs", {}).copy(),
-    )
-    return out
-
+    ro_lat, ro_lon = ro.latitude.values, ro.longitude.values
+    mr_lat, mr_lon = mrms0.latitude.values, mrms0.longitude.values
+    lat_idx = nearest_index(ro_lat, mr_lat)
+    lon_idx = nearest_index(ro_lon, mr_lon)
+    aligned = ro.values[:, lat_idx[:, None], lon_idx[None, :]]
+    return xr.DataArray(aligned, dims=("time", "latitude", "longitude"),
+                        coords={"time": ro.time.values, "latitude": mr_lat, "longitude": mr_lon})
 
 def local_naive_to_utc(dt_local_naive: datetime) -> datetime:
-    aware_local = dt_local_naive.replace(tzinfo=NY_TZ)
-    aware_utc = aware_local.astimezone(UTC_TZ)
-    return aware_utc.replace(tzinfo=None)
+    return dt_local_naive.replace(tzinfo=NY_TZ).astimezone(UTC_TZ).replace(tzinfo=None)
 
 def ceil_to_hour(dt: datetime) -> datetime:
     dt0 = dt.replace(minute=0, second=0, microsecond=0)
@@ -325,43 +197,23 @@ def ceil_to_hour(dt: datetime) -> datetime:
 
 def load_precip(file_type: str, dt_local_naive: datetime) -> xr.DataArray | None:
     dt_utc = local_naive_to_utc(dt_local_naive)
-    ts = dt_utc.strftime("%Y%m%d-%H%M00")
-    ymd = dt_utc.strftime("%Y%m%d")
-
-    if file_type == "RO":
-        filename = f"MRMS_RadarOnly_QPE_15M_00.00_{ts}.grib2.gz"
-        base = RO_S3_BASE
-    elif file_type == "MRMS":
-        filename = f"MRMS_MultiSensor_QPE_01H_Pass2_00.00_{ts}.grib2.gz"
-        base = MRMS_S3_BASE
-    else:
-        raise ValueError("file_type must be 'RO' or 'MRMS'")
-
+    ts, ymd = dt_utc.strftime("%Y%m%d-%H%M00"), dt_utc.strftime("%Y%m%d")
+    base = RO_S3_BASE if file_type == "RO" else MRMS_S3_BASE
+    filename = f"MRMS_{'RadarOnly_QPE_15M' if file_type=='RO' else 'MultiSensor_QPE_01H_Pass2'}_00.00_{ts}.grib2.gz"
     url = f"{base}/{ymd}/{filename}"
     tmp_path = tempfile.NamedTemporaryFile(suffix=".grib2", delete=False).name
-
-    r = requests.get(url, stream=True, timeout=25)
-    if r.status_code == 404:
-        return None
-    r.raise_for_status()
-
     try:
+        r = requests.get(url, stream=True, timeout=25)
+        if r.status_code == 404: return None
+        r.raise_for_status()
         with gzip.GzipFile(fileobj=r.raw) as gz, open(tmp_path, "wb") as f:
             shutil.copyfileobj(gz, f)
-
         with xr.open_dataset(tmp_path, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
-            var = list(ds.data_vars)[0]
-            da = ds[var].clip(min=0).load()
-
+            da = ds[list(ds.data_vars)[0]].load().squeeze()
         da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
-        da = da.rio.write_crs("EPSG:4326")
-        da = normalize_to_latlon(da)
-        return da
+        return normalize_to_latlon(da.rio.write_crs("EPSG:4326"))
     finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+        if os.path.exists(tmp_path): os.remove(tmp_path)
 
 def drop_time_coord(da: xr.DataArray) -> xr.DataArray:
     return da.drop_vars("time", errors="ignore")
@@ -369,312 +221,139 @@ def drop_time_coord(da: xr.DataArray) -> xr.DataArray:
 def save_frame_png(da: xr.DataArray, dt_local_naive: datetime) -> tuple[str, list]:
     data = da.values.astype("float32")
     data[data < 0.1] = np.nan
-
     img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_local_naive.strftime('%Y%m%d_%H%M')}.png")
     plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
-
-    bounds = [
-        float(da.longitude.min()),
-        float(da.latitude.min()),
-        float(da.longitude.max()),
-        float(da.latitude.max()),
-    ]
-    return img_path, bounds
+    return img_path, [float(da.longitude.min()), float(da.latitude.min()), float(da.longitude.max()), float(da.latitude.max())]
 
 def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> float:
-    """Stats only; display stays uncut."""
-    if ws_gdf is None:
-        return float(da_full.mean().values) / 25.4
+    if ws_gdf is None: return float(da_full.mean().values) / 25.4
     try:
         sub = da_full.rio.write_crs("EPSG:4326", inplace=False)
         clipped = sub.rio.clip(ws_gdf.geometry, ws_gdf.crs, drop=True)
-        if clipped.size == 0:
-            return float(da_full.mean().values) / 25.4
-        return float(clipped.mean().values) / 25.4
-    except Exception:
-        return float(da_full.mean().values) / 25.4
+        return float(clipped.mean().values) / 25.4 if clipped.size > 0 else float(da_full.mean().values) / 25.4
+    except: return float(da_full.mean().values) / 25.4
 
 # =============================
-# 5) SIDEBAR UI
+# 5) SIDEBAR & PROCESSING
 # =============================
 with st.sidebar:
     st.title("CNR GIS Portal")
-
-    s_date = st.date_input("Start Date", value=datetime.now().date())
-    e_date = st.date_input("End Date", value=datetime.now().date())
-
+    s_date, e_date = st.date_input("Start Date"), st.date_input("End Date")
     c1, c2 = st.columns(2)
-    hours = [f"{h:02d}:00" for h in range(24)]
-    s_time = c1.selectbox("Start Time", hours, index=19)
-    e_time = c2.selectbox("End Time", hours, index=21)
-
-    up_zip = st.file_uploader("Watershed Boundary (ZIP) (outline + stats only)", type="zip")
-    basin_name = "Default_Basin"
+    s_time = c1.selectbox("Start Time", [f"{h:02d}:00" for h in range(24)], index=19)
+    e_time = c2.selectbox("End Time", [f"{h:02d}:00" for h in range(24)], index=21)
+    up_zip = st.file_uploader("Watershed Boundary (ZIP)", type="zip")
+    basin_name = up_zip.name.replace(".zip", "") if up_zip else "Default_Basin"
 
     if up_zip:
-        basin_name = up_zip.name.replace(".zip", "")
         with tempfile.TemporaryDirectory() as td:
-            with zipfile.ZipFile(up_zip, "r") as z:
-                z.extractall(td)
+            with zipfile.ZipFile(up_zip, "r") as z: z.extractall(td)
             shps = list(Path(td).rglob("*.shp"))
             if shps:
                 st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
                 b = st.session_state.active_gdf.total_bounds
-                st.session_state.map_view = pdk.ViewState(
-                    latitude=(b[1] + b[3]) / 2,
-                    longitude=(b[0] + b[2]) / 2,
-                    zoom=11,
-                )
-
-    if st.session_state.processing_msg:
-        st.caption(st.session_state.processing_msg)
+                st.session_state.map_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=11)
 
     if st.button("Run Processing", use_container_width=True):
         try:
             if st.session_state.active_gdf is None:
-                st.session_state.processing_msg = "Upload a watershed boundary ZIP first."
-                st.rerun()
-
+                st.error("Upload watershed ZIP first"); st.stop()
+            
             start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
-            end_dt   = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
+            end_dt = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
+            ro_times = list(pd.date_range(start_dt + timedelta(minutes=15), end_dt, freq="15min"))
+            mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0), freq="1H"))
 
-            # alignment rule
-            ro_start   = start_dt + timedelta(minutes=15)
-            ro_end     = end_dt
-            mrms_start = ceil_to_hour(start_dt + timedelta(minutes=45))
-            mrms_end   = end_dt.replace(minute=0, second=0, microsecond=0)
-
-            ro_times   = list(pd.date_range(ro_start, ro_end, freq="15min"))
-            mrms_times = list(pd.date_range(mrms_start, mrms_end, freq="1H"))
-
-            pb = st.progress(0.0)
-            msg = st.empty()
-            total_steps = max(1, len(ro_times) + len(mrms_times) + 40)
-            step_i = 0
-
-            # 1) Download RO (NO CLIP)
+            pb = st.progress(0.0); msg = st.empty()
             ro_list, ro_kept = [], []
             for i, t in enumerate(ro_times):
-                msg.info(f"RadarOnly 15-min → {i+1}/{len(ro_times)} • {t:%Y-%m-%d %H:%M} (NY local)")
-                da = load_precip("RO", pd.Timestamp(t).to_pydatetime())
-                step_i += 1; pb.progress(min(1.0, step_i/total_steps))
-                if da is None:
-                    continue
-                ro_list.append(da.astype("float32"))
-                ro_kept.append(pd.Timestamp(t).to_pydatetime())
-
-            if len(ro_list) < 4:
-                raise RuntimeError("Not enough RadarOnly frames found in the selected period.")
-
+                msg.info(f"RO 15m: {i+1}/{len(ro_times)} • {t:%H:%M}")
+                da = load_precip("RO", t.to_pydatetime())
+                if da is not None:
+                    ro_list.append(da.astype("float32"))
+                    ro_kept.append(t)
+            
+            if len(ro_list) < 4: raise RuntimeError("Insufficient RO frames")
             ro = xr.concat(ro_list, dim="time").assign_coords(time=ro_kept)
 
-            # 2) Download MRMS (NO CLIP)
             mrms_list, mrms_kept = [], []
             for j, t in enumerate(mrms_times):
-                t_py = pd.Timestamp(t).to_pydatetime()
-                msg.info(f"MRMS 1-hr → {j+1}/{len(mrms_times)} • {t_py:%Y-%m-%d %H:%M} (NY local)")
+                msg.info(f"MRMS 1h: {j+1}/{len(mrms_times)} • {t:%H:%M}")
+                da = load_precip("MRMS", t.to_pydatetime())
+                if da is not None:
+                    mrms_list.append(da.astype("float32"))
+                    mrms_kept.append(t)
             
-                da = load_precip("MRMS", t_py)
-                step_i += 1
-                pb.progress(min(1.0, step_i / total_steps))
+            if not mrms_list: raise RuntimeError("No MRMS frames")
+            mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
             
-                if da is None:
-                    continue
-            
-                # da should already be (lat, lon) from load_precip(); this is just defensive
-                da = normalize_to_latlon(da).astype("float32")
-                mrms_list.append(da)
-                mrms_kept.append(t_py)
-            
-            if len(mrms_list) == 0:
-                raise RuntimeError("No MRMS hourly frames found for the aligned window.")
-            
-            # concat -> (time, lat, lon)
-            mrms = xr.concat(mrms_list, dim="time")
-            mrms = mrms.assign_coords(time=mrms_kept)
-            mrms = normalize_to_tlatlon(mrms).astype("float32")
-            
-            # RO must already exist by here, and be (time, lat, lon)
-            ro = normalize_to_tlatlon(ro).astype("float32")
-            
-            msg.info("Aligning RO grid to MRMS grid…")
+            msg.info("Aligning Grids...")
             ro = align_ro_to_mrms_grid_nearest(ro, mrms.isel(time=0))
             
-            step_i += 5
-            pb.progress(min(1.0, step_i / total_steps))
-
-
-            # 4) RO hourly sums aligned to MRMS (must have 4 frames)
-            msg.info("Computing RO hourly sums aligned to MRMS…")
-            ro_hourly, valid_times = [], []
+            ro_hourly, v_times = [], []
             for T in mrms.time.values:
-                Tdt = pd.to_datetime(str(T)).to_pydatetime()
+                Tdt = pd.to_datetime(T).to_pydatetime()
                 block = ro.sel(time=slice(Tdt - timedelta(minutes=45), Tdt))
-                if block.sizes.get("time", 0) != 4:
-                    continue
-                ro_hourly.append(block.sum(dim="time").astype("float32"))
-                valid_times.append(Tdt)
-
-            if not valid_times:
-                raise RuntimeError("No MRMS hours had a complete 4-frame RO block to scale.")
-
-            mrms = mrms.sel(time=pd.to_datetime(valid_times))
-            ro_hourly_da = xr.concat(ro_hourly, dim="time").assign_coords(time=pd.to_datetime(valid_times))
-            step_i += 6; pb.progress(min(1.0, step_i/total_steps))
-
-            # 5) scaling rasters (MRMS / RO_hourly)
-            msg.info("Computing hourly scaling rasters (MRMS / RO_hourly)…")
-            eps = 0.01
-            ratio_list = []
-            for i in range(len(mrms.time)):
-                mrms_slice = drop_time_coord(mrms.isel(time=i))
-                ro_slice   = drop_time_coord(ro_hourly_da.isel(time=i))
-
-                ratio = xr.where(ro_slice > eps, mrms_slice / ro_slice, 0.0)
-                ratio = ratio.where(np.isfinite(ratio), 0.0)
-                ratio = ratio.clip(min=0.0, max=50.0).astype("float32")
-                ratio_list.append(ratio)
-
-            scaling_da = xr.concat(ratio_list, dim="time").assign_coords(time=mrms.time.values)
-            step_i += 6; pb.progress(min(1.0, step_i/total_steps))
-
-            # 6) scale 15-min RO frames by the correct MRMS hour-end bin
-            msg.info("Applying hourly scaling to 15-min RO frames…")
-            mrms_ends = [pd.to_datetime(str(x)).to_pydatetime() for x in mrms.time.values]
+                if block.sizes["time"] == 4:
+                    ro_hourly.append(block.sum(dim="time"))
+                    v_times.append(Tdt)
+            
+            mrms = mrms.sel(time=v_times)
+            ro_h_da = xr.concat(ro_hourly, dim="time").assign_coords(time=v_times)
+            scaling = xr.where(ro_h_da > 0.01, mrms / ro_h_da, 0.0).clip(0, 50)
 
             ro_scaled_list, ro_scaled_times = [], []
             for t in ro.time.values:
-                tdt = pd.to_datetime(str(t)).to_pydatetime()
-                hour_end = next((T for T in mrms_ends if T >= tdt), None)
-                if hour_end is None:
-                    continue
-                if tdt < hour_end - timedelta(minutes=45):
-                    continue
-
-                hour_idx = mrms_ends.index(hour_end)
-
-                ro_slice_15  = drop_time_coord(ro.sel(time=tdt))
-                scale_raster = drop_time_coord(scaling_da.isel(time=hour_idx))
-
-                scaled = (ro_slice_15 * scale_raster).astype("float32")
-                scaled = normalize_grid(scaled)
-
-                ro_scaled_list.append(scaled)
-                ro_scaled_times.append(tdt)
-
-            if len(ro_scaled_list) == 0:
-                raise RuntimeError("Scaling produced zero frames (check overlap/time alignment).")
+                tdt = pd.to_datetime(t).to_pydatetime()
+                hour_end = next((T for T in v_times if T >= tdt and tdt >= T - timedelta(minutes=45)), None)
+                if hour_end:
+                    scale_raster = drop_time_coord(scaling.sel(time=hour_end))
+                    ro_scaled_list.append(normalize_grid(drop_time_coord(ro.sel(time=tdt)) * scale_raster))
+                    ro_scaled_times.append(tdt)
 
             ro_scaled_da = xr.concat(ro_scaled_list, dim="time").assign_coords(time=ro_scaled_times)
-            step_i += 10; pb.progress(min(1.0, step_i/total_steps))
-
-            # 7) render frames (NO CLIP)
-            msg.info("Rendering map frames…")
+            
             cache, stats = {}, []
-            for i, tdt in enumerate(ro_scaled_da.time.values):
-                dt_local = pd.to_datetime(str(tdt)).to_pydatetime()
-                da = ro_scaled_da.sel(time=dt_local)
+            for tdt in ro_scaled_da.time.values:
+                dt_l = pd.to_datetime(tdt).to_pydatetime()
+                da = ro_scaled_da.sel(time=tdt)
+                path, bnds = save_frame_png(da, dt_l)
+                lbl = dt_l.strftime("%Y-%m-%d %H:%M")
+                cache[lbl] = {"path": path, "bounds": bnds}
+                stats.append({"time": dt_l, "rain_in": watershed_mean_inch(da, st.session_state.active_gdf)})
 
-                mean_in = watershed_mean_inch(da, st.session_state.active_gdf)
-                img_path, bounds = save_frame_png(da, dt_local)
-
-                label = dt_local.strftime("%Y-%m-%d %H:%M")
-                cache[label] = {"path": img_path, "bounds": bounds}
-                stats.append({"time": dt_local, "rain_in": mean_in})
-
-                step_i += 1; pb.progress(min(1.0, step_i/total_steps))
-
-            st.session_state.radar_cache = cache
-            st.session_state.time_list = list(cache.keys())
-            st.session_state.current_time_index = 0
-            st.session_state.is_playing = False
+            st.session_state.radar_cache, st.session_state.time_list = cache, list(cache.keys())
             st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
-
-            msg.success(f"Complete: {len(cache)} frames • MRMS hours used: {len(mrms.time)}")
-            st.session_state.processing_msg = f"Last run: {basin_name} • {len(cache)} frames (RO scaled to MRMS hourly)"
-            st.rerun()
+            msg.success("Complete!"); st.rerun()
 
         except Exception as e:
-            st.session_state.processing_msg = f"Error: {type(e).__name__}: {e}"
-            st.error(st.session_state.processing_msg)
-            st.exception(e)
-            st.stop()
-
-    if st.session_state.basin_vault:
-        st.divider()
-        st.subheader("Outputs")
-        for name, df in st.session_state.basin_vault.items():
-            csv_download_link(df, filename=f"{name}.csv", label=f"{name}.csv")
+            st.error(f"Error: {e}"); st.exception(e); st.stop()
 
 # =============================
-# 6) ANIMATION LOOP
+# 6) RENDER
 # =============================
 if st.session_state.time_list and st.session_state.is_playing:
     st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
-    time.sleep(0.5)
-    st.rerun()
+    time.sleep(0.5); st.rerun()
 
-# =============================
-# 7) MAP RENDER
-# =============================
 layers = []
 if st.session_state.time_list:
-    key = st.session_state.time_list[st.session_state.current_time_index]
-    curr = st.session_state.radar_cache[key]
-    layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
-
+    curr = st.session_state.radar_cache[st.session_state.time_list[st.session_state.current_time_index]]
+    layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7))
 if st.session_state.active_gdf is not None:
-    layers.append(
-        pdk.Layer(
-            "GeoJsonLayer",
-            st.session_state.active_gdf.__geo_interface__,
-            stroked=True,
-            filled=False,
-            get_line_color=[255, 255, 255],
-            line_width_min_pixels=3,
-        )
-    )
+    layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
-deck = pdk.Deck(
-    layers=layers,
-    initial_view_state=st.session_state.map_view,
-    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-)
-st.pydeck_chart(deck, use_container_width=True, height=1000)
+st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=st.session_state.map_view, map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"), height=1000)
 
-# =============================
-# 8) CONTROLS
-# =============================
 if st.session_state.time_list:
     st.markdown('<div class="control-bar">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 10, 2])
-
     with c1:
-        if st.session_state.is_playing:
-            if st.button("⏸", key="pause_btn"):
-                st.session_state.is_playing = False
-                st.rerun()
-        else:
-            if st.button("▶", key="play_btn"):
-                st.session_state.is_playing = True
-                st.rerun()
-
+        if st.button("⏸" if st.session_state.is_playing else "▶"):
+            st.session_state.is_playing = not st.session_state.is_playing; st.rerun()
     with c2:
-        idx = st.select_slider(
-            " ",
-            options=list(range(len(st.session_state.time_list))),
-            value=int(st.session_state.current_time_index),
-            format_func=lambda i: st.session_state.time_list[i],
-            label_visibility="collapsed",
-            key="timeline_slider",
-        )
+        idx = st.select_slider(" ", options=range(len(st.session_state.time_list)), value=st.session_state.current_time_index, format_func=lambda i: st.session_state.time_list[i], label_visibility="collapsed")
         if idx != st.session_state.current_time_index:
-            st.session_state.current_time_index = idx
-            st.session_state.is_playing = False
-            st.rerun()
-
-    with c3:
-        st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
-
+            st.session_state.current_time_index = idx; st.session_state.is_playing = False; st.rerun()
+    with c3: st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
     st.markdown("</div>", unsafe_allow_html=True)
-
