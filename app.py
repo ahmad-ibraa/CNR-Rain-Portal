@@ -17,67 +17,67 @@ from matplotlib.colors import ListedColormap
 import rioxarray 
 
 # -----------------------------
-# 1. PAGE CONFIG & FULLSCREEN CSS
+# 1. PAGE CONFIG & STABLE LAYOUT
 # -----------------------------
 st.set_page_config(layout="wide", page_title="CNR Radar Portal")
 
 st.markdown("""
 <style>
-    /* 1. Force the App to be a true fullscreen canvas */
-    [data-testid="stAppViewContainer"] {
-        background-color: #0e1117;
-    }
-
-    /* 2. Fix the Map to the background - This kills the 'half screen' bug */
-    .stPydeckChart {
-        position: fixed !important;
-        top: 0;
-        left: 0;
-        width: 100vw !important;
+    /* Force the app to fill the screen without scrolling */
+    .main .block-container {
+        padding: 0 !important;
+        max-width: 100% !important;
         height: 100vh !important;
-        z-index: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
     }
 
-    /* 3. Make the sidebar solid so it doesn't clash with map colors */
+    /* Force the Map to be the 'Bottom Layer' but full height */
+    .stPydeckChart {
+        flex-grow: 1 !important;
+        height: 95vh !important; 
+        width: 100% !important;
+    }
+
+    /* Floating Sidebar */
     [data-testid="stSidebar"] {
+        min-width: 400px !important;
         background-color: #111 !important;
-        z-index: 100;
-        border-right: 1px solid #333;
     }
 
-    /* 4. Style the Timeline Slider at the bottom */
+    /* Floating Slider at Bottom */
     .stSlider {
         position: fixed !important;
-        bottom: 30px !important;
-        left: 380px !important;
+        bottom: 20px !important;
+        left: 420px !important;
         right: 40px !important;
-        z-index: 1000 !important;
-        background: rgba(10, 10, 10, 0.85) !important;
+        z-index: 999;
+        background: rgba(20, 20, 20, 0.9) !important;
         padding: 10px 30px !important;
         border-radius: 50px !important;
-        border: 1px solid #444;
+        border: 1px solid #333;
     }
 
-    /* Hide standard Streamlit headers */
     header, footer { visibility: hidden !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------
-# 2. STATE & DIRECTORY
+# 2. STATE MANAGEMENT
 # -----------------------------
-RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
-RADAR_CMAP = ListedColormap(RADAR_COLORS)
-
-if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'radar_cache' not in st.session_state: st.session_state.radar_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
 if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
+# This stores multiple processed DataFrames keyed by Basin Name
+if 'basin_vault' not in st.session_state: st.session_state.basin_vault = {} 
 if 'map_view' not in st.session_state:
     st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
-
 if "img_dir" not in st.session_state:
     st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
+
+RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
+RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
 # -----------------------------
 # 3. RADAR ENGINE
@@ -87,7 +87,7 @@ def get_radar_image(dt_utc):
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
     tmp_grib = tempfile.NamedTemporaryFile(suffix=".grib2", delete=False).name
     try:
-        r = requests.get(url, stream=True, timeout=20)
+        r = requests.get(url, stream=True, timeout=15)
         if r.status_code != 200: return None, 0, None
         with gzip.GzipFile(fileobj=r.raw) as gz, open(tmp_grib, "wb") as f:
             shutil.copyfileobj(gz, f)
@@ -129,7 +129,9 @@ with st.sidebar:
     e_time = c2.selectbox("End", hours, index=21)
 
     up_zip = st.file_uploader("Upload Watershed ZIP", type="zip")
+    basin_name = "Default_Basin"
     if up_zip:
+        basin_name = up_zip.name.replace(".zip", "")
         with tempfile.TemporaryDirectory() as td:
             with zipfile.ZipFile(up_zip, 'r') as z: z.extractall(td)
             shps = list(Path(td).rglob("*.shp"))
@@ -154,39 +156,36 @@ with st.sidebar:
                     cache[ts.strftime("%H:%M")] = {"path": path, "bounds": bnds}
                     stats.append({"time": ts, "rain_in": val})
                 pb.progress((i + 1) / len(tr))
-            st.session_state.radar_cache, st.session_state.time_list = cache, list(cache.keys())
-            st.session_state.processed_df = pd.DataFrame(stats)
+            
+            st.session_state.radar_cache = cache
+            st.session_state.time_list = list(cache.keys())
+            # Save this specific run to the vault
+            st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
 
-    # --- RESTORED & IMPROVED DATA SECTION ---
-    if st.session_state.processed_df is not None:
+    # --- THE MULTI-FILE DOWNLOADER ---
+    if st.session_state.basin_vault:
         st.write("---")
-        if st.button("📊 SHOW ANALYSIS PLOT", use_container_width=True):
+        st.subheader("📁 Processed Basins")
+        
+        # Select WHICH CSV file you want to interact with
+        target_basin = st.selectbox("Select CSV to Download", options=list(st.session_state.basin_vault.keys()))
+        df_target = st.session_state.basin_vault[target_basin]
+        
+        if st.button(f"📊 PLOT {target_basin}", use_container_width=True):
             import plotly.express as px
-            @st.dialog("Rainfall Statistics", width="large")
+            @st.dialog(f"Stats: {target_basin}", width="large")
             def modal():
-                fig = px.bar(st.session_state.processed_df, x='time', y='rain_in', 
-                             title="Basin Average Rainfall (inches)", template="plotly_dark")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(px.bar(df_target, x='time', y='rain_in', template="plotly_dark"), use_container_width=True)
             modal()
         
-        st.subheader("📁 Data Downloads")
-        # File selector to choose which timestamp to download
-        selected_file_time = st.selectbox("Select Timestamp to View/Download", st.session_state.time_list)
-        
-        # Display the specific value for that timestamp
-        val = st.session_state.processed_df[st.session_state.processed_df['time'].dt.strftime("%H:%M") == selected_file_time]['rain_in'].values[0]
-        st.metric(label=f"Rainfall at {selected_file_time}", value=f"{val:.4f} in")
-        
-        # Download the full CSV
-        full_csv = st.session_state.processed_df.to_csv(index=False).encode('utf-8')
-        st.download_button("DOWNLOAD FULL CSV", data=full_csv, file_name="radar_full_stats.csv", mime='text/csv', use_container_width=True)
+        csv_data = df_target.to_csv(index=False).encode('utf-8')
+        st.download_button(f"DOWNLOAD {target_basin}.CSV", data=csv_data, file_name=f"{target_basin}.csv", use_container_width=True)
 
 # -----------------------------
 # 5. MAP RENDER
 # -----------------------------
 layers = []
 if st.session_state.time_list:
-    # Use select_slider with a custom style (handled in CSS above)
     t_str = st.select_slider("", options=st.session_state.time_list, label_visibility="collapsed")
     curr = st.session_state.radar_cache[t_str]
     layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7))
