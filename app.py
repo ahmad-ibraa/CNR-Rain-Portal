@@ -399,35 +399,6 @@ with st.sidebar:
             msg.success("Complete."); st.rerun()
         except Exception as e:
             st.error(f"Error: {e}"); st.exception(e); st.stop()
-# =============================
-# 6) ANIMATION / 7) MAP / 8) CONTROLS (Kept exactly as original)
-# =============================
-if st.session_state.time_list and st.session_state.is_playing:
-    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
-    time.sleep(0.5); st.rerun()
-
-layers = []
-if st.session_state.time_list:
-    curr = st.session_state.radar_cache[st.session_state.time_list[st.session_state.current_time_index]]
-    layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
-if st.session_state.active_gdf is not None:
-    layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
-
-st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=st.session_state.map_view, map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"), use_container_width=True, height=1000)
-
-if st.session_state.time_list:
-    st.markdown('<div class="control-bar">', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 10, 2])
-    with c1:
-        if st.button("⏸" if st.session_state.is_playing else "▶", key="play_btn"):
-            st.session_state.is_playing = not st.session_state.is_playing; st.rerun()
-    with c2:
-        idx = st.select_slider(" ", options=list(range(len(st.session_state.time_list))), value=int(st.session_state.current_time_index), format_func=lambda i: st.session_state.time_list[i], label_visibility="collapsed", key="timeline_slider")
-        if idx != st.session_state.current_time_index:
-            st.session_state.current_time_index, st.session_state.is_playing = idx, False; st.rerun()
-    with c3: st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
-    st.markdown("</div>", unsafe_allow_html=True)
-
 
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
@@ -502,3 +473,4 @@ with st.sidebar:
         # --- DOWNLOADS ---
         st.write("### Exports")
         csv_download_link(current_basin_df, f"{basin_name}_rainfall.csv", f"Download {basin_name} CSV")
+
