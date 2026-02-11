@@ -173,6 +173,7 @@ st.markdown("""
 # =============================
 # 3) STATE
 # =============================
+if "time_list" not in st.session_state: st.session_state.time_list = []
 if st.session_state.time_list:
     st.session_state.current_time_index = int(
         np.clip(st.session_state.current_time_index, 0, len(st.session_state.time_list) - 1)
@@ -460,7 +461,7 @@ st.pydeck_chart(pdk.Deck(
     layers=layers, 
     initial_view_state=st.session_state.map_view, 
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-), use_container_width=True, height=1000, key="map")
+), width="stretch", height=1000, key="map")
 
 import streamlit.components.v1 as components
 
@@ -558,6 +559,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
