@@ -8,168 +8,149 @@ import gzip
 import shutil
 import tempfile
 import os
+import zipfile
 from pathlib import Path
 from datetime import datetime, timedelta
 import leafmap.foliumap as leafmap
 import plotly.express as px
 
-# --- CONSTANTS & CONFIG ---
-MRMS_S3_BASE = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/MultiSensor_QPE_01H_Pass2_00.00"
-RO_S3_BASE   = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00"
-SHP_BASE     = Path("Shapefiles")
+# --- APP CONFIG ---
+st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🌧️")
 
-st.set_page_config(layout="wide", page_title="CNR Radar Portal")
+# Initialize Session State
+if 'processed_df' not in st.session_state:
+    st.session_state.processed_df = None
+if 'raster_cache' not in st.session_state:
+    st.session_state.raster_cache = {}
+if 'time_list' not in st.session_state:
+    st.session_state.time_list = []
 
-# --- UTILITY FUNCTIONS ---
+# --- CORE FUNCTIONS ---
 
 def get_tz_offset(dt):
-    """Simple DST check for NJ (EDT/EST)"""
-    # 2nd Sun March to 1st Sun Nov
+    # Standard NJ logic (EDT=4, EST=5)
     edt_start = datetime(dt.year, 3, 8 + (6 - datetime(dt.year, 3, 1).weekday()) % 7)
     edt_end = datetime(dt.year, 11, 1 + (6 - datetime(dt.year, 11, 1).weekday()) % 7)
     return 4 if edt_start <= dt < edt_end else 5
 
-def load_grib_from_s3(file_type, dt_local):
-    """Downloads, decompresses, and loads GRIB2 into Xarray"""
+def download_s3_grib(file_type, dt_local):
     offset = get_tz_offset(dt_local)
     dt_utc = dt_local + timedelta(hours=offset)
     s3_folder = dt_utc.strftime("%Y%m%d")
     ts = dt_utc.strftime("%Y%m%d-%H%M00")
     
+    base_url = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS"
     if file_type == "RO":
-        filename = f"MRMS_RadarOnly_QPE_15M_00.00_{ts}.grib2.gz"
-        url = f"{RO_S3_BASE}/{s3_folder}/{filename}"
+        url = f"{base_url}/RadarOnly_QPE_15M_00.00/{s3_folder}/MRMS_RadarOnly_QPE_15M_00.00_{ts}.grib2.gz"
     else:
-        filename = f"MRMS_MultiSensor_QPE_01H_Pass2_00.00_{ts}.grib2.gz"
-        url = f"{MRMS_S3_BASE}/{s3_folder}/{filename}"
+        url = f"{base_url}/MultiSensor_QPE_01H_Pass2_00.00/{s3_folder}/MRMS_MultiSensor_QPE_01H_Pass2_00.00_{ts}.grib2.gz"
 
-    tmp_grib = tempfile.NamedTemporaryFile(suffix=".grib2", delete=False).name
+    tmp_path = tempfile.NamedTemporaryFile(suffix=".grib2", delete=False).name
     try:
-        r = requests.get(url, stream=True, timeout=15)
+        r = requests.get(url, stream=True, timeout=10)
         if r.status_code == 200:
-            with gzip.GzipFile(fileobj=r.raw) as gz, open(tmp_grib, "wb") as f:
+            with gzip.GzipFile(fileobj=r.raw) as gz, open(tmp_path, "wb") as f:
                 shutil.copyfileobj(gz, f)
-            ds = xr.open_dataset(tmp_grib, engine="cfgrib", backend_kwargs={"indexpath": ""})
-            da = ds[list(ds.data_vars)[0]].load()
-            # Fix coords
-            da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
-            da = da.rio.write_crs("EPSG:4326")
-            return da
-    except Exception:
-        return None
+            with xr.open_dataset(tmp_path, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
+                da = ds[list(ds.data_vars)[0]].load()
+                da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
+                return da.rio.write_crs("EPSG:4326")
+    except: return None
     finally:
-        if os.path.exists(tmp_grib): os.remove(tmp_grib)
+        if os.path.exists(tmp_path): os.remove(tmp_path)
     return None
 
-def find_shapefiles():
-    """Detects cities based on folder names in Shapefiles/"""
-    mapping = {}
-    if SHP_BASE.exists():
-        for folder in SHP_BASE.iterdir():
-            if folder.is_dir() and folder.name not in ["Backup", "Municipal Boundaries"]:
-                shps = list(folder.glob("*.shp"))
-                if shps:
-                    mapping[folder.name] = shps[0]
-    return mapping
-
-# --- MAIN APP UI ---
-
-st.title("🛰️ Interactive Radar Rainfall Portal")
-st.markdown("Extract bias-corrected (MRMS+RO) rainfall data for any CNR city.")
-
-# Sidebar Controls
+# --- SIDEBAR: INPUTS ---
 with st.sidebar:
-    st.header("1. Parameters")
-    city_map = find_shapefiles()
-    selected_cities = st.multiselect("Select Cities", list(city_map.keys()))
+    st.header("1. Selection")
     
-    date_pick = st.date_input("Analysis Date", datetime.now() - timedelta(days=2))
-    viz_hour = st.select_slider("Map Time (Hour)", options=list(range(24)), value=12)
+    col1, col2 = st.columns(2)
+    start_date = col1.date_input("Start Date", datetime.now() - timedelta(days=2))
+    start_time = col2.time_input("Start Time", value=datetime.strptime("00:00", "%H:%M").time())
     
-    process_btn = st.button("🚀 Process 24-Hour Range")
-
-# --- MAP SECTION ---
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    m = leafmap.Map(center=[40.1, -74.5], zoom=8)
+    col3, col4 = st.columns(2)
+    end_date = col3.date_input("End Date", datetime.now() - timedelta(days=1))
+    end_time = col4.time_input("End Time", value=datetime.strptime("23:45", "%H:%M").time())
     
-    # Visualize Radar for the selected hour
-    target_dt = datetime.combine(date_pick, datetime.min.time()) + timedelta(hours=viz_hour)
-    radar_da = load_grib_from_s3("RO", target_dt)
-    
-    if radar_da is not None:
-        with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp_tif:
-            radar_da.rio.to_raster(tmp_tif.name)
-            m.add_raster(tmp_tif.name, layer_name=f"Radar {viz_hour}:00", colormap="jet", opacity=0.5)
-    else:
-        st.warning(f"Radar data for {target_dt.strftime('%H:%M')} not found on S3.")
+    start_dt = datetime.combine(start_date, start_time)
+    end_dt = datetime.combine(end_date, end_time)
 
-    # Show city boundaries
-    for city in selected_cities:
-        gdf = gpd.read_file(city_map[city])
-        m.add_gdf(gdf, layer_name=city)
-    
-    m.to_streamlit(height=600)
-
-with col2:
-    st.info("**Instructions:**\n1. Select cities from the list.\n2. Use the slider to check radar coverage on the map.\n3. Click 'Process' to generate statistics and CSV.")
-
-# --- PROCESSING LOGIC ---
-
-if process_btn and selected_cities:
     st.divider()
-    with st.spinner("Downloading 24 hours of GRIB2 and scaling..."):
-        
-        # 1. Collect 24 hours of RO (15m) and MRMS (1h)
-        ro_data, mrms_data = [], []
-        base_dt = datetime.combine(date_pick, datetime.min.time())
-        
-        for h in range(24):
-            h_dt = base_dt + timedelta(hours=h)
-            # Get MRMS
-            m_da = load_grib_from_s3("MRMS", h_dt)
-            if m_da is not None: mrms_data.append(m_da.expand_dims(time=[h_dt]))
-            # Get 4 RO slices
-            for m_inc in [0, 15, 30, 45]:
-                t_dt = h_dt + timedelta(minutes=m_inc)
-                r_da = load_grib_from_s3("RO", t_dt)
-                if r_da is not None: ro_data.append(r_da.expand_dims(time=[t_dt]))
+    st.header("2. Boundary")
+    uploaded_zip = st.file_uploader("Import Boundaries (ZIP)", type="zip")
+    
+    active_gdf = None
+    if uploaded_zip:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with zipfile.ZipFile(uploaded_zip, 'r') as z:
+                z.extractall(tmp_dir)
+            shps = list(Path(tmp_dir).rglob("*.shp"))
+            if shps:
+                active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
+                st.success(f"Loaded {len(active_gdf)} polygons")
 
-        if not ro_data or not mrms_data:
-            st.error("Could not find enough data for this date range.")
+    st.divider()
+    if st.button("🚀 Process & Export", use_container_width=True):
+        if active_gdf is None:
+            st.error("Missing Shapefile!")
         else:
-            # 2. Bias Correction Logic
-            ro = xr.concat(ro_data, dim="time").fillna(0)
-            mrms = xr.concat(mrms_data, dim="time").fillna(0)
-            
-            # Simple scaling: RO_scaled = RO * (MRMS / RO_sum_hourly)
-            ro_h = ro.resample(time='1H', label='right', closed='right').sum()
-            scale = (mrms / ro_h).where(np.isfinite(mrms / ro_h), 0)
-            
-            # Apply scale back to 15m (simplified for demo)
-            ro_scaled = (ro * 1.0) # Placeholder for the element-wise math
-            ro_scaled_in = ro_scaled / 25.4 # mm to inches
-            
-            # 3. Calculate Regional Means
-            final_df = pd.DataFrame(index=pd.to_datetime(ro_scaled_in.time.values))
-            
-            for city in selected_cities:
-                gdf = gpd.read_file(city_map[city]).to_crs("EPSG:4326")
-                clipped = ro_scaled_in.rio.clip(gdf.geometry, gdf.crs, all_touched=True)
-                final_df[city] = clipped.mean(dim=("latitude", "longitude")).values
+            with st.spinner("Downloading Radar Data..."):
+                time_range = pd.date_range(start_dt, end_dt, freq='15min')
+                temp_rasters = {}
+                series_list = []
+                
+                prog = st.progress(0)
+                for i, ts in enumerate(time_range):
+                    da = download_s3_grib("RO", ts)
+                    if da is not None:
+                        # Save temp TIFF for map
+                        t_tif = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
+                        da.rio.to_raster(t_tif)
+                        time_str = ts.strftime("%Y-%m-%d %H:%M")
+                        temp_rasters[time_str] = t_tif
+                        
+                        # Clip and calculate mean
+                        clipped = da.rio.clip(active_gdf.geometry, active_gdf.crs, all_touched=True)
+                        series_list.append({"time": ts, "rain_in": clipped.mean().item() / 25.4})
+                    
+                    prog.progress((i + 1) / len(time_range))
+                
+                st.session_state.processed_df = pd.DataFrame(series_list).set_index("time")
+                st.session_state.raster_cache = temp_rasters
+                st.session_state.time_list = list(temp_rasters.keys())
 
-            # 4. Display Stats & Plots
-            st.subheader("Statistical Summary (Inches)")
-            stats = pd.DataFrame({
-                "Mean": final_df.mean(),
-                "Max": final_df.max(),
-                "75th Perc": final_df.quantile(0.75)
-            }).reset_index().rename(columns={'index': 'City'})
-            
-            fig = px.bar(stats, x="City", y=["Mean", "Max", "75th Perc"], barmode="group")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # 5. Download Button
-            csv = final_df.to_csv().encode('utf-8')
-            st.download_button("📥 Download 15-Min Results (CSV)", csv, f"Rainfall_{date_pick}.csv", "text/csv")
+# --- MAIN PAGE ---
+
+# 1. Visualization Controls (Only show after processing)
+view_time = None
+if st.session_state.time_list:
+    view_time = st.select_slider("🕰️ Visualizer Slider:", options=st.session_state.time_list)
+
+# 2. The Map
+m = leafmap.Map(center=[40.1, -74.5], zoom=8)
+
+if view_time and view_time in st.session_state.raster_cache:
+    m.add_raster(st.session_state.raster_cache[view_time], layer_name="Radar Layer", colormap="terrain", opacity=0.6)
+
+if active_gdf is not None:
+    m.add_gdf(active_gdf, layer_name="Boundaries")
+    # If it's a new upload, center the map
+    if not st.session_state.time_list:
+        m.zoom_to_gdf(active_gdf)
+
+m.to_streamlit(height=600)
+
+# 3. Results Section
+if st.session_state.processed_df is not None:
+    st.divider()
+    col_a, col_b = st.columns([2, 1])
+    
+    with col_a:
+        fig = px.bar(st.session_state.processed_df.reset_index(), x="time", y="rain_in", title="Rainfall depth (inches)")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col_b:
+        st.subheader("Stats & Export")
+        st.dataframe(st.session_state.processed_df.describe())
+        csv_data = st.session_state.processed_df.to_csv().encode('utf-8')
+        st.download_button("📥 Download CSV", csv_data, "rainfall_results.csv", "text/csv")
