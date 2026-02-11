@@ -27,182 +27,120 @@ st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar
 # -----------------------------
 st.markdown("""
 <style>
-    /* ABSOLUTE POSITIONING FROM TOP - ZERO OFFSET */
-    html, body {
-        height: 100vh !important;
-        width: 100vw !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        overflow: hidden !important;
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-    }
-    
-    [data-testid="stAppViewContainer"], 
-    [data-testid="stApp"],
-    .main,
-    section.main {
-        height: 100vh !important;
-        width: 100vw !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        overflow: hidden !important;
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-    }
+/* --- GLOBAL: no scroll, no padding --- */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+    height: 100vh !important;
+    width: 100vw !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
 
-    /* Force vertical block to full height with zero spacing */
-    [data-testid="stVerticalBlock"] {
-        height: 100vh !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        gap: 0 !important;
-    }
-    
-    /* Block container - absolute top positioning */
-    .main .block-container {
-        padding: 0 !important;
-        margin: 0 !important;
-        max-width: 100% !important;
-        height: 100vh !important;
-        overflow: hidden !important;
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-    }
+/* Main area must not add padding */
+.main .block-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100vw !important;
+}
 
-    /* LOCK SIDEBAR - No resize, no collapse, no arrows */
-    [data-testid="stSidebar"] {
-        min-width: 400px !important;
-        max-width: 400px !important;
-        width: 400px !important;
-        z-index: 999 !important;
-        position: fixed !important;
-        left: 0 !important;
-        top: 0 !important;
-        height: 100vh !important;
-        background-color: rgba(17, 17, 17, 0.95) !important;
-        backdrop-filter: blur(10px);
-    }
+/* Hide streamlit chrome */
+header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] {
+    display: none !important;
+    height: 0 !important;
+    visibility: hidden !important;
+}
 
-    /* REMOVE ALL sidebar controls */
-    [data-testid="stSidebarResizer"],
-    [data-testid="stSidebarNav"],
-    [class*="StyledSidebarResizableContainer"] > div:nth-child(2),
-    [data-testid="collapsedControl"],
-    button[title="Collapse sidebar"],
-    button[kind="header"],
-    [data-testid="stSidebar"] button[kind="headerNoPadding"],
-    [data-testid="stSidebar"] > div > div > button,
-    .css-1544g2n,
-    .css-1cypcdb {
-        display: none !important;
-        visibility: hidden !important;
-        pointer-events: none !important;
-    }
+/* --- SIDEBAR: fixed width, not resizable, not collapsible --- */
+[data-testid="stSidebar"] {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    height: 100vh !important;
 
-    /* Prevent resize on edges */
-    [data-testid="stSidebar"]::before,
-    [data-testid="stSidebar"]::after {
-        content: none !important;
-        display: none !important;
-    }
+    min-width: 400px !important;
+    max-width: 400px !important;
+    width: 400px !important;
 
-    /* FULLSCREEN MAP - ANCHORED AT ABSOLUTE TOP */
-    .stPydeckChart, 
-    .stPydeckChart > div {
-        height: 100vh !important;
-        min-height: 100vh !important;
-        width: 100% !important;
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
+    background: rgba(17,17,17,0.95) !important;
+    backdrop-filter: blur(10px);
+    border-right: 1px solid rgba(255,255,255,0.08);
+    z-index: 1000 !important;
+}
 
-    /* Target both possible iframe titles */
-    iframe[title="pydeck.io"],
-    iframe[title="streamlit_pydeck.pydeck_chart"] {
-        height: 100vh !important;
-        width: 100vw !important;
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        border: none !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
+/* Remove resizer + collapse button */
+[data-testid="stSidebarResizer"],
+[data-testid="collapsedControl"],
+button[title="Collapse sidebar"] {
+    display: none !important;
+}
 
-    /* Map element container - fixed at absolute top */
-    .element-container:has(iframe[title="streamlit_pydeck.pydeck_chart"]) {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100vw !important;
-        height: 100vh !important;
-        z-index: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
+/* Sidebar internal padding/gap fixes (THIS removes the “big empty space”) */
+[data-testid="stSidebar"] > div {
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.35rem !important;   /* reduce vertical gaps between widgets */
+}
+[data-testid="stSidebar"] .block-container {
+    padding: 0 14px !important; /* reduce left/right padding */
+}
 
-    /* FLOATING CONTROLS AT BOTTOM */
-    .main .element-container {
-        display: none;
-    }
-    
-    .main .element-container:has(iframe[title="streamlit_pydeck.pydeck_chart"]) {
-        display: block !important;
-    }
-    
-    /* Position controls container */
-    .main > div > div > div:last-child .element-container:has([data-testid="column"]) {
-        display: block !important;
-        position: fixed !important;
-        bottom: 20px !important;
-        left: 420px !important;
-        right: 20px !important;
-        z-index: 998 !important;
-        background: rgba(15, 15, 15, 0.95) !important;
-        padding: 15px 30px !important;
-        border-radius: 50px !important;
-        border: 1px solid #444;
-        backdrop-filter: blur(10px);
-    }
+/* Keep sidebar content scrollable if it ever overflows */
+[data-testid="stSidebarContent"] {
+    height: 100vh !important;
+    overflow: auto !important;
+}
 
-    /* Circular play/pause buttons */
-    .stButton button {
-        border-radius: 50% !important;
-        width: 50px !important;
-        height: 50px !important;
-        padding: 0 !important;
-        font-size: 20px !important;
-        line-height: 50px !important;
-    }
+/* --- MAP: truly edge-to-edge, behind sidebar --- */
+/* Make pydeck wrapper fixed fullscreen */
+.stPydeckChart, .stPydeckChart > div {
+    position: fixed !important;
+    inset: 0 !important;        /* top/right/bottom/left = 0 */
+    height: 100vh !important;
+    width: 100vw !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    z-index: 0 !important;
+}
 
-    /* HIDE HEADER/FOOTER/TOOLBAR */
-    header, 
-    footer, 
-    [data-testid="stHeader"], 
-    [data-testid="stToolbar"],
-    [data-testid="stDecoration"],
-    [data-testid="stStatusWidget"] { 
-        visibility: hidden !important; 
-        height: 0px !important; 
-        display: none !important;
-        position: absolute !important;
-        top: -1000px !important;
-    }
-    
-    /* Remove gaps between elements */
-    div[data-testid="stVerticalBlock"] > div,
-    div[data-testid="stVerticalBlock"] > div > div {
-        gap: 0 !important;
-    }
+/* Target the actual pydeck iframe */
+iframe[title="pydeck.io"],
+iframe[title="streamlit_pydeck.pydeck_chart"] {
+    position: fixed !important;
+    inset: 0 !important;
+    height: 100vh !important;
+    width: 100vw !important;
+    border: 0 !important;
+    z-index: 0 !important;
+}
+
+/* --- FLOATING CONTROLS AT BOTTOM (your play/slider row) --- */
+.controls-float {
+    position: fixed !important;
+    bottom: 18px !important;
+    left: 420px !important;   /* sidebar (400) + padding */
+    right: 18px !important;
+    z-index: 1200 !important;
+
+    background: rgba(15, 15, 15, 0.92) !important;
+    padding: 12px 20px !important;
+    border-radius: 999px !important;
+    border: 1px solid rgba(255,255,255,0.12);
+    backdrop-filter: blur(10px);
+}
+
+/* Make your play button circular */
+.controls-float .stButton button {
+    border-radius: 999px !important;
+    width: 44px !important;
+    height: 44px !important;
+    padding: 0 !important;
+    font-size: 18px !important;
+}
 </style>
 """, unsafe_allow_html=True)
+
 
 # -----------------------------
 # 3. STATE MANAGEMENT
@@ -361,8 +299,10 @@ st.pydeck_chart(deck, use_container_width=True, height=1000)
 # 8. CONTROLS (positioned at bottom by CSS)
 # -----------------------------
 if st.session_state.time_list:
+    st.markdown('<div class="controls-float">', unsafe_allow_html=True)
+
     col1, col2, col3 = st.columns([1, 10, 2])
-    
+
     with col1:
         if st.session_state.is_playing:
             if st.button("⏸", key="pause_btn"):
@@ -372,20 +312,22 @@ if st.session_state.time_list:
             if st.button("▶", key="play_btn"):
                 st.session_state.is_playing = True
                 st.rerun()
-    
+
     with col2:
         selected_index = st.select_slider(
             "",
             options=range(len(st.session_state.time_list)),
             value=st.session_state.current_time_index,
             format_func=lambda x: st.session_state.time_list[x],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
         )
         if selected_index != st.session_state.current_time_index:
             st.session_state.current_time_index = selected_index
             st.session_state.is_playing = False
             st.rerun()
-    
+
     with col3:
         st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
