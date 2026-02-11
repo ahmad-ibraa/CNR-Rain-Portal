@@ -23,70 +23,74 @@ import time
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar_state="expanded")
 
 # -----------------------------
-# 2. THE REFINED CSS
+# 2. THE CSS FIX
 # -----------------------------
 st.markdown("""
 <style>
-    /* 1. RESET ROOT CONTAINERS */
-    [data-testid="stAppViewContainer"] {
-        height: 100vh !important;
-        overflow: hidden !important;
-    }
-    
-    /* 2. FIX MAP POSITION: Absolute anchor to top-left to stop the 'offset' */
-    .stPydeckChart {
-        position: absolute !important;
-        top: 0 !important;
-        left: 0 !important;
-        height: 100vh !important;
-        width: 100vw !important;
-        z-index: 0 !important;
+    /* KILL THE TOP OFFSET: Remove Streamlit's header space */
+    [data-testid="stHeader"] {
+        display: none !important;
     }
 
-    /* 3. SIDEBAR LOCKDOWN */
+    /* FULL HEIGHT ROOT */
+    [data-testid="stAppViewContainer"] {
+        height: 100vh !important;
+        width: 100vw !important;
+        overflow: hidden !important;
+    }
+
+    /* THE MAP: Force it to fill the vertical block */
+    [data-testid="stVerticalBlock"] {
+        gap: 0 !important;
+    }
+    
+    .stPydeckChart {
+        height: 100vh !important;
+        width: 100vw !important;
+        min-height: 100vh !important;
+    }
+
+    /* SIDEBAR LOCKDOWN: Width + No Hide + No Resize */
     [data-testid="stSidebar"] {
         min-width: 400px !important;
         max-width: 400px !important;
         width: 400px !important;
-        z-index: 100 !important;
     }
-    /* Hide the resize handle and collapse button */
-    [data-testid="stSidebarResizer"], button[title="Collapse sidebar"], [data-testid="collapsedControl"] {
+    [data-testid="stSidebarResizer"], [data-testid="collapsedControl"], button[title="Collapse sidebar"] {
         display: none !important;
     }
 
-    /* 4. RESTORE MISSING BUTTONS & MAIN CONTENT FLOW */
-    /* We only want to float the slider, not hide the whole main block */
-    .main .block-container {
-        padding: 0 !important;
-        max-width: 100% !important;
-    }
-
-    /* 5. FLOATING CONTROLS: Specifically target the container we created at the bottom */
-    div[data-testid="stVerticalBlock"] > div:last-child:has(.stSlider) {
+    /* FLOATING BOTTOM CONTROLS */
+    /* Only target the last vertical block for the slider */
+    div[data-testid="stVerticalBlock"] > div:last-child {
         position: fixed !important;
-        bottom: 30px !important;
-        left: 430px !important;
-        right: 30px !important;
-        z-index: 1000 !important;
-        background: rgba(15, 15, 15, 0.95) !important;
-        padding: 10px 30px !important;
+        bottom: 20px !important;
+        left: 420px !important;
+        right: 20px !important;
+        z-index: 999 !important;
+        background: rgba(15, 15, 15, 0.9) !important;
+        padding: 10px 25px !important;
         border-radius: 50px !important;
         border: 1px solid #444;
-        backdrop-filter: blur(8px);
     }
 
-    /* Styling the Play/Pause circular buttons */
-    .stButton > button {
+    /* BUTTON STYLING: Only make the PLAY/PAUSE buttons round */
+    /* We use a specific selector for buttons inside the floating controller */
+    div[data-testid="column"] .stButton button {
         border-radius: 50% !important;
         width: 45px !important;
         height: 45px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
+        padding: 0 !important;
     }
 
-    header, footer { visibility: hidden !important; height: 0 !important; }
+    /* LEAVE SIDEBAR BUTTONS ALONE */
+    [data-testid="stSidebar"] .stButton button {
+        border-radius: 4px !important;
+        width: 100% !important;
+        height: auto !important;
+    }
+
+    footer { visibility: hidden !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -195,7 +199,8 @@ with st.sidebar:
                 st.plotly_chart(px.bar(df_target, x='time', y='rain_in', template="plotly_dark"), use_container_width=True)
             modal()
         
-        st.download_button(f"DOWNLOAD CSV", data=df_target.to_csv(index=False).encode('utf-8'), file_name=f"{target_file}.csv", use_container_width=True)
+        st.download_button(f"DOWNLOAD CSV", data=df_target.to_csv(index=False).encode('utf-8'), 
+                           file_name=f"{target_file}.csv", use_container_width=True)
 
 # -----------------------------
 # 5. ANIMATION & MAP
@@ -214,6 +219,7 @@ if st.session_state.active_gdf is not None:
     layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                             stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
+# Render map
 st.pydeck_chart(pdk.Deck(
     layers=layers,
     initial_view_state=st.session_state.map_view,
