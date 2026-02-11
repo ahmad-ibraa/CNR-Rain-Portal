@@ -312,58 +312,83 @@ with st.sidebar:
             if st.session_state.active_gdf is None:
                 st.session_state.processing_msg = "Upload a watershed boundary ZIP first."; st.rerun()
 
+            # 1. Setup spatial bounds (CROP TO BASIN)
+            b = st.session_state.active_gdf.total_bounds
+            # Buffer by ~0.1 degrees to ensure no edge issues
+            lon_min, lat_min, lon_max, lat_max = b[0]-0.1, b[1]-0.1, b[2]+0.1, b[3]+0.1
+
             start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
             end_dt = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
             ro_times = list(pd.date_range(start_dt + timedelta(minutes=15), end_dt, freq="15min"))
             mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1H"))
 
             pb, msg = st.progress(0.0), st.empty()
+            
+            # 2. Download and CROP RO Data
             ro_list, ro_kept = [], []
             for i, t in enumerate(ro_times):
-                msg.info(f"Downloading RO → {i+1}/{len(ro_times)}")
-                if (da := load_precip("RO", t.to_pydatetime())) is not None:
-                    ro_list.append(da.astype("float32")); ro_kept.append(t.to_pydatetime())
+                msg.info(f"RO → {i+1}/{len(ro_times)}")
+                da = load_precip("RO", t.to_pydatetime())
+                if da is not None:
+                    # SUBSET IMMEDIATELY
+                    da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
+                    ro_list.append(da.astype("float32"))
+                    ro_kept.append(t.to_pydatetime())
             
             if len(ro_list) < 4: raise RuntimeError("Insufficient RO data.")
             ro = xr.concat(ro_list, dim="time").assign_coords(time=ro_kept)
             del ro_list; gc.collect()
 
+            # 3. Download and CROP MRMS Data
             mrms_list, mrms_kept = [], []
             for j, t in enumerate(mrms_times):
-                msg.info(f"Downloading MRMS → {j+1}/{len(mrms_times)}")
-                if (da := load_precip("MRMS", t.to_pydatetime())) is not None:
-                    mrms_list.append(da.astype("float32")); mrms_kept.append(t.to_pydatetime())
+                msg.info(f"MRMS → {j+1}/{len(mrms_times)}")
+                da = load_precip("MRMS", t.to_pydatetime())
+                if da is not None:
+                    # SUBSET IMMEDIATELY
+                    da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
+                    mrms_list.append(da.astype("float32"))
+                    mrms_kept.append(t.to_pydatetime())
             
             if not mrms_list: raise RuntimeError("No MRMS data found.")
             mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
             del mrms_list; gc.collect()
             
+            # 4. Alignment (Now much faster because arrays are tiny)
             msg.info("Aligning grids...")
             ro = align_ro_to_mrms_grid_nearest(ro, mrms.isel(time=0))
             gc.collect()
 
+            # 5. Bias Scaling
             msg.info("Calculating Bias Scaling...")
             ro_hourly, v_times = [], []
             for T in mrms.time.values:
                 Tdt = pd.to_datetime(str(T)).to_pydatetime()
                 block = ro.sel(time=slice(Tdt - timedelta(minutes=45) - timedelta(seconds=1), Tdt))
                 if block.sizes.get("time", 0) == 4:
-                    ro_hourly.append(block.sum(dim="time").astype("float32")); v_times.append(Tdt)
+                    ro_hourly.append(block.sum(dim="time").astype("float32"))
+                    v_times.append(Tdt)
             
-            mrms = mrms.sel(time=pd.to_datetime(v_times))
+            if not v_times: raise RuntimeError("No matching RO/MRMS windows found.")
+            
+            mrms_subset = mrms.sel(time=pd.to_datetime(v_times))
             ro_hr_da = xr.concat(ro_hourly, dim="time").assign_coords(time=pd.to_datetime(v_times))
-            scaling = xr.where(ro_hr_da > 0.01, mrms / ro_hr_da, 0.0).clip(0, 50).astype("float32")
-            del ro_hr_da, ro_hourly; gc.collect()
+            scaling = xr.where(ro_hr_da > 0.01, mrms_subset / ro_hr_da, 0.0).clip(0, 50).astype("float32")
+            del ro_hr_da, ro_hourly, mrms_subset; gc.collect()
 
-            msg.info("Scaling 15-min frames...")
-            cache, stats, ro_scaled_list = {}, [], []
+            # 6. Final Scaling and PNG Generation
+            msg.info("Rendering frames...")
+            cache, stats = {}, []
             m_ends = [pd.to_datetime(str(x)).to_pydatetime() for x in mrms.time.values]
+            
             for t in ro.time.values:
                 tdt = pd.to_datetime(str(t)).to_pydatetime()
                 h_end = next((T for T in m_ends if T >= tdt), None)
                 if h_end and tdt >= h_end - timedelta(minutes=45):
                     h_idx = m_ends.index(h_end)
+                    # Apply spatial scaling
                     s_frame = (drop_time_coord(ro.sel(time=tdt)) * drop_time_coord(scaling.isel(time=h_idx))).astype("float32")
+                    
                     img, bnds = save_frame_png(s_frame, tdt)
                     lbl = tdt.strftime("%Y-%m-%d %H:%M")
                     cache[lbl] = {"path": img, "bounds": bnds}
@@ -374,7 +399,6 @@ with st.sidebar:
             msg.success("Complete."); st.rerun()
         except Exception as e:
             st.error(f"Error: {e}"); st.exception(e); st.stop()
-
 # =============================
 # 6) ANIMATION / 7) MAP / 8) CONTROLS (Kept exactly as original)
 # =============================
@@ -403,3 +427,4 @@ if st.session_state.time_list:
             st.session_state.current_time_index, st.session_state.is_playing = idx, False; st.rerun()
     with c3: st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
     st.markdown("</div>", unsafe_allow_html=True)
+
