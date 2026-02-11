@@ -696,7 +696,7 @@ else:
     )
 
     deck_key = f"map_{st.session_state.current_time_label}"
-    st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
+    st.pydeck_chart(deck, use_container_width=True, height=1000, key=deck_key)
 
 
 # =============================
@@ -776,5 +776,6 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
