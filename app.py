@@ -131,18 +131,13 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
 )
 st.markdown("""
 <style>
-/* --- MAP LAYER --- */
-#deckgl-wrapper{
-  position:fixed !important;
-  inset:0 !important;
-  z-index: 0 !important;
-}
+/* Ensure map stays clickable */
 #deckgl-wrapper, #deckgl-wrapper canvas{
   pointer-events:auto !important;
 }
 
-/* --- FLOATING CONTROL BAR (REAL) --- */
-div:has(> #control_bar_anchor){
+/* FLOATING CONTROL BAR (match ancestor even if nested) */
+div:has(#control_bar_anchor){
   position: fixed !important;
   left: 420px !important;
   right: 18px !important;
@@ -157,12 +152,12 @@ div:has(> #control_bar_anchor){
 }
 
 /* Make sure widgets inside are clickable */
-div:has(> #control_bar_anchor) *{
+div:has(#control_bar_anchor) *{
   pointer-events: auto !important;
 }
 
 /* Round Play/Pause Button */
-div:has(> #control_bar_anchor) .stButton button{
+div:has(#control_bar_anchor) .stButton button{
   border-radius: 999px !important;
   width: 44px !important;
   height: 44px !important;
@@ -171,6 +166,7 @@ div:has(> #control_bar_anchor) .stButton button{
 }
 </style>
 """, unsafe_allow_html=True)
+
 
 # =============================
 # 3) STATE
@@ -341,7 +337,9 @@ with st.sidebar:
             # 1. Setup spatial bounds (CROP TO BASIN)
             b = st.session_state.active_gdf.total_bounds
             # Buffer by ~0.1 degrees to ensure no edge issues
-            lon_min, lat_min, lon_max, lat_max = b[0]-0.1, b[1]-0.1, b[2]+0.1, b[3]+0.1
+            BUFFER_DEG = 0.35  # ~35-40 km-ish
+            lon_min, lat_min, lon_max, lat_max = b[0]-BUFFER_DEG, b[1]-BUFFER_DEG, b[2]+BUFFER_DEG, b[3]+BUFFER_DEG
+
 
             start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
             end_dt = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
@@ -515,6 +513,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
