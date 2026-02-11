@@ -419,8 +419,8 @@ with st.sidebar:
     e_date = st.date_input("End Date", value=max(datetime.now().date(), min_local_date), min_value=min_local_date)
 
     c1, c2 = st.columns(2)
-    s_time = c1.selectbox("Start Time", hours := [f"{h:02d}:00" for h in range(24)], index=19)
-    e_time = c2.selectbox("End Time", hours, index=21)
+    s_time = c1.selectbox("Start Time", hours := [f"{h:02d}:00" for h in range(24)], index=00)
+    e_time = c2.selectbox("End Time", hours, index=00)
     up_zip = st.file_uploader("Watershed Boundary (ZIP)", type="zip")
     basin_name = up_zip.name.replace(".zip", "") if up_zip else "Default_Basin"
 
@@ -667,6 +667,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
