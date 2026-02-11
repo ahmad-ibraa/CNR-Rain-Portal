@@ -38,20 +38,18 @@ st.markdown("""
         background: rgba(15,15,15,0.9); padding: 15px; border-radius: 50px;
         border: 1px solid #444; backdrop-filter: blur(10px);
     }
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # =============================
-# 2) HELPERS (The "No-Crash" Logic)
+# 2) HELPERS
 # =============================
 def clean_da(da):
-    """Squeezes extra dims and rounds coords to prevent alignment crashes."""
     da = da.squeeze()
-    # Drop any non-spatial/time dimensions
     keep = {"time", "latitude", "longitude"}
     to_drop = [c for c in da.coords if c not in keep]
     da = da.drop_vars(to_drop, errors="ignore")
-    # Rounding is critical to prevent 40.0000001 != 40.0
     da = da.assign_coords(
         latitude=da.latitude.round(4),
         longitude=da.longitude.round(4)
@@ -91,8 +89,15 @@ if "is_playing" not in st.session_state: st.session_state.is_playing = False
 
 with st.sidebar:
     st.title("CNR Radar Portal")
-    s_date = st.date_input("Start", value=datetime.now().date())
-    e_date = st.date_input("End", value=datetime.now().date())
+    
+    # Restored Date/Time Inputs
+    s_date = st.date_input("Start Date", value=datetime.now().date())
+    e_date = st.date_input("End Date", value=datetime.now().date())
+    
+    t_cols = st.columns(2)
+    hours = [f"{h:02d}:00" for h in range(24)]
+    s_time = t_cols[0].selectbox("Start Time", hours, index=19)
+    e_time = t_cols[1].selectbox("End Time", hours, index=22)
     
     up_zip = st.file_uploader("Watershed ZIP", type="zip")
     if up_zip:
@@ -105,74 +110,71 @@ with st.sidebar:
                 st.session_state.map_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=10)
 
     if st.button("PROCESS DATA", use_container_width=True):
-        if not st.session_state.get("active_gdf") is not None:
+        if st.session_state.get("active_gdf") is None:
             st.error("Upload a ZIP first")
         else:
-            # Generate Time Ranges
-            s_dt = datetime.combine(s_date, datetime.min.time()) + timedelta(hours=19) # Default 7pm
-            e_dt = s_dt + timedelta(hours=3) # Default 3 hour window
+            # Combine Date and Time
+            start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
+            end_dt = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
             
-            ro_times = pd.date_range(s_dt, e_dt, freq="15min")
-            mrms_times = pd.date_range(s_dt + timedelta(hours=1), e_dt, freq="1H")
+            ro_times = pd.date_range(start_dt, end_dt, freq="15min")
+            mrms_times = pd.date_range(start_dt + timedelta(hours=1), end_dt, freq="1H")
 
             # 1. Download
-            ro_list = []
+            ro_list, mrms_list = [], []
             msg = st.empty()
+            
             for t in ro_times:
                 msg.info(f"Downloading RO: {t:%H:%M}")
                 da = load_precip("RO", t.to_pydatetime())
                 if da is not None: ro_list.append(da.assign_coords(time=t))
             
-            mrms_list = []
             for t in mrms_times:
                 msg.info(f"Downloading MRMS: {t:%H:%M}")
                 da = load_precip("MRMS", t.to_pydatetime())
                 if da is not None: mrms_list.append(da.assign_coords(time=t))
 
-            # 2. Alignment Logic
-            msg.info("Aligning Grids...")
-            ro = xr.concat(ro_list, dim="time")
-            mrms = xr.concat(mrms_list, dim="time")
-            
-            # Use reindex_like to force RO onto MRMS grid safely
-            ro = ro.reindex_like(mrms, method="nearest")
-            
-            # 3. Scaling
-            msg.info("Calculating Scaled Precip...")
-            final_frames = []
-            for t_mrms in mrms.time:
-                # Sum 4 RO frames leading up to this MRMS hour
-                t_end = pd.to_datetime(t_mrms.values)
-                t_start = t_end - timedelta(minutes=45)
-                ro_hour_sum = ro.sel(time=slice(t_start, t_end)).sum(dim="time")
+            if not ro_list or not mrms_list:
+                st.error("Missing data for selected range.")
+            else:
+                # 2. Alignment Logic
+                msg.info("Aligning Grids...")
+                ro = xr.concat(ro_list, dim="time")
+                mrms = xr.concat(mrms_list, dim="time")
+                ro = ro.reindex_like(mrms, method="nearest")
                 
-                mrms_val = mrms.sel(time=t_mrms)
-                scale = xr.where(ro_hour_sum > 0.1, mrms_val / ro_hour_sum, 1.0).clip(0, 10)
-                
-                # Apply scale to the 4 original frames
-                for t_sub in pd.date_range(t_start, t_end, freq="15min"):
-                    if t_sub in ro.time:
-                        scaled_frame = ro.sel(time=t_sub) * scale
-                        final_frames.append((t_sub, scaled_frame))
+                # 3. Scaling
+                msg.info("Calculating Scaled Precip...")
+                final_frames = []
+                for t_mrms in mrms.time:
+                    t_end = pd.to_datetime(t_mrms.values)
+                    t_start = t_end - timedelta(minutes=45)
+                    ro_hour_sum = ro.sel(time=slice(t_start, t_end)).sum(dim="time")
+                    mrms_val = mrms.sel(time=t_mrms)
+                    scale = xr.where(ro_hour_sum > 0.1, mrms_val / ro_hour_sum, 1.0).clip(0, 10)
+                    
+                    for t_sub in pd.date_range(t_start, t_end, freq="15min"):
+                        if t_sub in ro.time:
+                            final_frames.append((t_sub, ro.sel(time=t_sub) * scale))
 
-            # 4. Cache Images
-            RADAR_CMAP = ListedColormap(["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"])
-            img_dir = tempfile.mkdtemp()
-            cache = {}
-            for ts, da in final_frames:
-                path = os.path.join(img_dir, f"{ts:%H%M}.png")
-                arr = da.values
-                arr[arr < 0.1] = np.nan
-                plt.imsave(path, arr, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
-                bounds = [float(da.longitude.min()), float(da.latitude.min()), float(da.longitude.max()), float(da.latitude.max())]
-                cache[f"{ts:%Y-%m-%d %H:%M}"] = {"path": path, "bounds": bounds}
-            
-            st.session_state.radar_cache = cache
-            st.session_state.time_list = sorted(list(cache.keys()))
-            msg.success("Processing Ready")
+                # 4. Render
+                RADAR_CMAP = ListedColormap(["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"])
+                img_dir = tempfile.mkdtemp()
+                cache = {}
+                for ts, da in final_frames:
+                    path = os.path.join(img_dir, f"r_{ts:%H%M}.png")
+                    arr = da.values
+                    arr[arr < 0.1] = np.nan
+                    plt.imsave(path, arr, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
+                    bounds = [float(da.longitude.min()), float(da.latitude.min()), float(da.longitude.max()), float(da.latitude.max())]
+                    cache[f"{ts:%Y-%m-%d %H:%M}"] = {"path": path, "bounds": bounds}
+                
+                st.session_state.radar_cache = cache
+                st.session_state.time_list = sorted(list(cache.keys()))
+                msg.success(f"Processed {len(cache)} frames.")
 
 # =============================
-# 4) MAP & PLAYER
+# 4) RENDER MAP & PLAYER
 # =============================
 if st.session_state.time_list and st.session_state.is_playing:
     st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
@@ -184,23 +186,23 @@ if st.session_state.time_list:
     curr = st.session_state.radar_cache[curr_key]
     
     layers = [pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7)]
-    if "active_gdf" in st.session_state:
+    if st.session_state.get("active_gdf") is not None:
         layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255,255,255], line_width_min_pixels=2))
     
     st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=st.session_state.get("map_view"), map_style="mapbox://styles/mapbox/dark-v10"), height=1000)
 
-    # Floating Controls
+    # Controls
     st.markdown('<div class="control-bar">', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 8, 2])
-    with c1:
+    col1, col2, col3 = st.columns([1, 8, 2])
+    with col1:
         if st.button("⏸" if st.session_state.is_playing else "▶"):
             st.session_state.is_playing = not st.session_state.is_playing
             st.rerun()
-    with c2:
-        new_idx = st.select_slider("Time", options=range(len(st.session_state.time_list)), value=st.session_state.current_time_index, format_func=lambda x: st.session_state.time_list[x], label_visibility="collapsed")
+    with col2:
+        new_idx = st.select_slider(" ", options=range(len(st.session_state.time_list)), value=st.session_state.current_time_index, format_func=lambda x: st.session_state.time_list[x], label_visibility="collapsed")
         if new_idx != st.session_state.current_time_index:
             st.session_state.current_time_index = new_idx
             st.session_state.is_playing = False
             st.rerun()
-    with c3: st.write(f"**{curr_key}**")
+    with col3: st.write(f"**{curr_key}**")
     st.markdown('</div>', unsafe_allow_html=True)
