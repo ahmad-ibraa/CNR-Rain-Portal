@@ -3,11 +3,9 @@ pandas
 geopandas
 xarray
 cfgrib
+eccodes
 rioxarray
 requests
-leafmap
+pydeck
+pyarrow
 plotly
-eccodes
-rasterio
-localtileserver
-psutil
