@@ -1,11 +1,11 @@
-streamlit
 pandas
 geopandas
 xarray
+numpy
+requests
 cfgrib
 eccodes
 rioxarray
-requests
 pydeck
-pyarrow
+matplotlib
 plotly
