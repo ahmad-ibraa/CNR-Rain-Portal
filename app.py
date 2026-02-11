@@ -15,6 +15,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import rioxarray 
+import time
 
 # -----------------------------
 # 1. PAGE CONFIG
@@ -26,27 +27,58 @@ st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar
 # -----------------------------
 st.markdown("""
 <style>
-    /* 1. LOCK SIDEBAR: Prevent resizing and hiding */
-    /* Target the sidebar container specifically */
+    /* FORCE FULL HEIGHT FROM ROOT DOWN */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+        height: 100vh !important;
+        width: 100vw !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+    }
+
+    /* Force vertical block wrapper to full height (THE KEY FIX) */
+    [data-testid="stVerticalBlock"] {
+        height: 100vh !important;
+    }
+
+    /* 1. LOCK SIDEBAR: Prevent resizing and hiding - NUCLEAR OPTION */
     [data-testid="stSidebar"] {
         min-width: 400px !important;
         max-width: 400px !important;
         width: 400px !important;
+        z-index: 999 !important;
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+        height: 100vh !important;
     }
 
-    /* Hide the resize handle (the invisible drag bar) */
-    [data-testid="stSidebarResizer"], [class*="StyledSidebarResizableContainer"] > div:nth-child(2) {
+    /* COMPLETELY REMOVE resize handle, collapse button, and any arrows */
+    [data-testid="stSidebarResizer"],
+    [data-testid="stSidebarNav"],
+    [class*="StyledSidebarResizableContainer"] > div:nth-child(2),
+    [data-testid="collapsedControl"],
+    button[title="Collapse sidebar"],
+    button[kind="header"],
+    [data-testid="stSidebar"] button[kind="headerNoPadding"],
+    [data-testid="stSidebar"] > div > div > button,
+    .css-1544g2n,
+    .css-1cypcdb {
         display: none !important;
-        width: 0px !important;
-        cursor: default !important;
+        width: 0 !important;
+        height: 0 !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
     }
 
-    /* Hide the 'X' collapse button in the sidebar */
-    [data-testid="collapsedControl"], button[title="Collapse sidebar"] {
+    /* Disable pointer events on sidebar edges to prevent resize attempts */
+    [data-testid="stSidebar"]::before,
+    [data-testid="stSidebar"]::after {
+        content: none !important;
         display: none !important;
     }
 
-    /* 2. FULL SCREEN MAP: Kill all padding and force height */
+    /* 2. FULL SCREEN MAP - THE COMPLETE FIX */
     .main .block-container {
         padding: 0 !important;
         margin: 0 !important;
@@ -55,28 +87,72 @@ st.markdown("""
         overflow: hidden !important;
     }
 
-    /* Target the specific wrapper that Streamlit puts around Pydeck */
-    .stPydeckChart, .stPydeckChart > div, iframe {
+    /* Ensure the pydeck chart wrapper is full height (critical) */
+    .stPydeckChart, .stPydeckChart > div {
         height: 100vh !important;
-        width: 100% !important;
         min-height: 100vh !important;
+        width: 100% !important;
     }
 
-    /* 3. FLOATING SLIDER: Anchored at bottom */
-    .stSlider {
+    /* Target the iframe specifically */
+    iframe[title="pydeck.io"],
+    iframe[title="streamlit_pydeck.pydeck_chart"] {
+        height: 100vh !important;
+        width: 100vw !important;
+    }
+
+    /* Make the map container fullscreen and fixed */
+    .element-container:has(iframe[title="streamlit_pydeck.pydeck_chart"]) {
         position: fixed !important;
-        bottom: 30px !important;
-        left: 430px !important;
-        right: 30px !important;
-        z-index: 1000 !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: 0 !important;
+    }
+
+    /* 3. FLOATING CONTROLS: Anchored at bottom */
+    /* Hide all element containers by default in main */
+    .main .element-container {
+        display: none;
+    }
+    
+    /* Show only the map container */
+    .main .element-container:has(iframe[title="streamlit_pydeck.pydeck_chart"]) {
+        display: block !important;
+    }
+    
+    /* Show and position the controls container (last one with columns) */
+    .main > div > div > div:last-child .element-container:has([data-testid="column"]) {
+        display: block !important;
+        position: fixed !important;
+        bottom: 20px !important;
+        left: 420px !important;
+        right: 20px !important;
+        z-index: 998 !important;
         background: rgba(15, 15, 15, 0.95) !important;
-        padding: 10px 30px !important;
+        padding: 15px 30px !important;
         border-radius: 50px !important;
         border: 1px solid #444;
+        backdrop-filter: blur(10px);
+    }
+
+    /* Style play/pause buttons */
+    .stButton button {
+        border-radius: 50% !important;
+        width: 50px !important;
+        height: 50px !important;
+        padding: 0 !important;
+        font-size: 20px !important;
+        line-height: 50px !important;
     }
 
     /* Hide Top Header and Footer */
-    header, footer, [data-testid="stHeader"] { visibility: hidden !important; height: 0px !important; }
+    header, footer, [data-testid="stHeader"] { 
+        visibility: hidden !important; 
+        height: 0px !important; 
+        display: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -91,6 +167,10 @@ if 'map_view' not in st.session_state:
     st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 if "img_dir" not in st.session_state:
     st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
+if 'is_playing' not in st.session_state:
+    st.session_state.is_playing = False
+if 'current_time_index' not in st.session_state:
+    st.session_state.current_time_index = 0
 
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
@@ -168,6 +248,7 @@ with st.sidebar:
                     stats.append({"time": ts, "rain_in": val})
                 pb.progress((i + 1) / len(tr))
             st.session_state.radar_cache, st.session_state.time_list = cache, list(cache.keys())
+            st.session_state.current_time_index = 0
             st.session_state.basin_vault[up_zip.name] = pd.DataFrame(stats)
 
     if st.session_state.basin_vault:
@@ -187,20 +268,64 @@ with st.sidebar:
         st.download_button(f"DOWNLOAD CSV", data=csv_data, file_name=f"{target_file}.csv", use_container_width=True)
 
 # -----------------------------
-# 5. MAP
+# 5. ANIMATION LOGIC
+# -----------------------------
+if st.session_state.time_list and st.session_state.is_playing:
+    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
+    time.sleep(0.5)
+    st.rerun()
+
+# -----------------------------
+# 6. MAP
 # -----------------------------
 layers = []
 if st.session_state.time_list:
-    t_str = st.select_slider("", options=st.session_state.time_list, label_visibility="collapsed")
-    curr = st.session_state.radar_cache[t_str]
+    current_time_str = st.session_state.time_list[st.session_state.current_time_index]
+    curr = st.session_state.radar_cache[current_time_str]
     layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7))
 
 if st.session_state.active_gdf is not None:
     layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                             stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
-st.pydeck_chart(pdk.Deck(
+# Create deck with explicit height to prevent Streamlit clamping
+deck = pdk.Deck(
     layers=layers,
     initial_view_state=st.session_state.map_view,
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-), use_container_width=True)
+)
+
+# Render with explicit height - CSS will still make it 100vh but this prevents initial clamp
+st.pydeck_chart(deck, use_container_width=True, height=1000)
+
+# -----------------------------
+# 7. CONTROLS (positioned at bottom by CSS)
+# -----------------------------
+if st.session_state.time_list:
+    col1, col2, col3 = st.columns([1, 10, 2])
+    
+    with col1:
+        if st.session_state.is_playing:
+            if st.button("⏸", key="pause_btn"):
+                st.session_state.is_playing = False
+                st.rerun()
+        else:
+            if st.button("▶", key="play_btn"):
+                st.session_state.is_playing = True
+                st.rerun()
+    
+    with col2:
+        selected_index = st.select_slider(
+            "",
+            options=range(len(st.session_state.time_list)),
+            value=st.session_state.current_time_index,
+            format_func=lambda x: st.session_state.time_list[x],
+            label_visibility="collapsed"
+        )
+        if selected_index != st.session_state.current_time_index:
+            st.session_state.current_time_index = selected_index
+            st.session_state.is_playing = False
+            st.rerun()
+    
+    with col3:
+        st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
