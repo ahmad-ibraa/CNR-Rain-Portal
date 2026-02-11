@@ -171,25 +171,23 @@ st.markdown("""
 
 
 # =============================
-# 3) STATE
+# 3) STATE (must be before any st.session_state access)
 # =============================
-if "time_list" not in st.session_state: st.session_state.time_list = []
-if st.session_state.time_list:
-    st.session_state.current_time_index = int(
-        np.clip(st.session_state.current_time_index, 0, len(st.session_state.time_list) - 1)
-    )
-else:
-    st.session_state.current_time_index = 0
+defaults = {
+    "radar_cache": {},
+    "time_list": [],
+    "active_gdf": None,
+    "basin_vault": {},
+    "map_view": pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9),
+    "img_dir": tempfile.mkdtemp(prefix="radar_png_"),
+    "is_playing": False,
+    "current_time_index": 0,
+    "processing_msg": "",
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-if "radar_cache" not in st.session_state: st.session_state.radar_cache = {}
-if "time_list" not in st.session_state: st.session_state.time_list = []
-if "active_gdf" not in st.session_state: st.session_state.active_gdf = None
-if "basin_vault" not in st.session_state: st.session_state.basin_vault = {}
-if "map_view" not in st.session_state: st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
-if "img_dir" not in st.session_state: st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
-if "is_playing" not in st.session_state: st.session_state.is_playing = False
-if "current_time_index" not in st.session_state: st.session_state.current_time_index = 0
-if "processing_msg" not in st.session_state: st.session_state.processing_msg = ""
 
 RADAR_COLORS = ["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"]
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
@@ -431,7 +429,9 @@ with st.sidebar:
             st.session_state.is_playing = False
             st.session_state.current_time_index = 0
             st.session_state.radar_cache = cache
-            st.session_state.time_list = list(cache.keys())
+            st.session_state.time_list = sorted(cache.keys())
+            st.session_state.current_time_index = 0
+            st.session_state.is_playing = False
             st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
             msg.success("Complete."); st.rerun()
         except Exception as e:
@@ -452,8 +452,7 @@ if st.session_state.is_playing:
 layers = []
 if st.session_state.time_list:
     curr = st.session_state.radar_cache[st.session_state.time_list[st.session_state.current_time_index]]
-    img_url = curr["path"] + f"?v={st.session_state.current_time_index}"
-    layers.append(pdk.Layer("BitmapLayer", image=img_url, bounds=curr["bounds"], opacity=0.70))
+    layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
 if st.session_state.active_gdf is not None:
     layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
@@ -483,20 +482,28 @@ if st.session_state.time_list:
                 st.rerun()
 
         with col_slider:
-            n = len(st.session_state.time_list)
-            st.session_state.current_time_index = max(0, min(int(st.session_state.current_time_index), n-1))
-            
-            idx = st.select_slider(
+            time_list = st.session_state.get("time_list", [])
+            n = len(time_list)
+            if n == 0:
+                st.stop()
+        
+            # clamp
+            st.session_state.current_time_index = max(
+                0, min(int(st.session_state.current_time_index), n - 1)
+            )
+        
+            cur_label = time_list[st.session_state.current_time_index]
+        
+            chosen = st.select_slider(
                 "Timeline",
-                options=list(range(n)),
-                value=int(st.session_state.current_time_index),
-                format_func=lambda i: st.session_state.time_list[i] if 0 <= i < n else "",
+                options=time_list,          # IMPORTANT: labels directly
+                value=cur_label,
                 label_visibility="collapsed",
                 key="timeline_slider"
             )
-
-            if idx != st.session_state.current_time_index:
-                st.session_state.current_time_index = idx
+        
+            if chosen != cur_label:
+                st.session_state.current_time_index = time_list.index(chosen)
                 st.session_state.is_playing = False
                 st.rerun()
 
@@ -559,6 +566,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
