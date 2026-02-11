@@ -15,45 +15,46 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
-# --- 1. THE "GHOST LAYER" CSS ---
+# --- 1. THE "GHOST UI" CSS (Solves the Blackout) ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal")
 
 st.markdown("""
     <style>
-        /* 1. Force the entire Streamlit UI to be a transparent 'ghost' layer */
-        [data-testid="stAppViewContainer"], [data-testid="stMain"], .main {
+        /* 1. Force the app background to be totally invisible */
+        [data-testid="stAppViewContainer"], 
+        [data-testid="stMain"], 
+        .stApp,
+        .main {
             background: transparent !important;
             background-color: transparent !important;
         }
 
-        /* 2. Remove all padding so the UI sits flush against the edges */
-        .block-container {
-            padding: 0 !important;
-            margin: 0 !important;
-            max-width: 100vw !important;
-        }
-
-        /* 3. Force the Map to be the absolute bottom floor at Z-INDEX 0 */
+        /* 2. Make the Map fill the entire window and sit at Z-index 0 */
         iframe[title="pydeck.io"] {
             position: fixed !important;
             top: 0 !important;
             left: 0 !important;
             width: 100vw !important;
             height: 100vh !important;
-            z-index: 0 !important; 
+            z-index: 0 !important;
             border: none !important;
         }
 
-        /* 4. Restore pointer events for UI elements so they remain clickable */
-        [data-testid="stSidebar"], .stSlider, div.stButton, .stDialog {
-            z-index: 100 !important;
+        /* 3. The 'Ghost' Trick: Allow clicks to pass through the UI to the map */
+        [data-testid="stMain"] {
+            pointer-events: none !important;
+        }
+        
+        /* 4. RE-ENABLE clicks for the slider and sidebar specifically */
+        [data-testid="stSidebar"], .stSlider, .stDialog, .stButton {
             pointer-events: auto !important;
+            z-index: 1000 !important;
         }
 
-        /* 5. Glass Sidebar Styling */
+        /* 5. Glass Sidebar */
         [data-testid="stSidebar"] {
-            background-color: rgba(20, 20, 20, 0.8) !important;
-            backdrop-filter: blur(15px) !important;
+            background-color: rgba(15, 15, 15, 0.8) !important;
+            backdrop-filter: blur(15px);
             border-right: 1px solid rgba(255, 255, 255, 0.1);
         }
 
@@ -61,7 +62,7 @@ st.markdown("""
         .stSlider {
             position: fixed !important;
             bottom: 40px !important;
-            left: 350px !important; 
+            left: 360px !important; 
             right: 40px !important;
             background: rgba(10, 10, 10, 0.9) !important;
             padding: 10px 40px !important;
@@ -69,23 +70,23 @@ st.markdown("""
             border: 1px solid #444 !important;
         }
 
-        /* Hide Streamlit Clutter */
+        /* 7. Hide all standard Streamlit UI junk */
         header, footer, [data-testid="stHeader"] { visibility: hidden !important; height: 0; }
+        .block-container { padding: 0 !important; margin: 0 !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SETUP & STATE ---
+# --- 2. DATA ENGINE & STATE ---
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
-if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'radar_cache' not in st.session_state: st.session_state.radar_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
+if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
 if 'map_view' not in st.session_state: 
     st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 
-# --- 3. DATA ENGINE ---
 def get_radar_image(dt_utc):
     ts_str = dt_utc.strftime("%Y%m%d-%H%M00") 
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
@@ -114,11 +115,12 @@ def get_radar_image(dt_utc):
     finally:
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
-# --- 4. SIDEBAR ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
-    st.title("CNR GIS Portal")
-    s_date = st.date_input("Date", value=datetime.now().date())
-    up_zip = st.file_uploader("Watershed ZIP", type="zip")
+    st.title("CNR GIS Dashboard")
+    s_date = st.date_input("Select Date", value=datetime.now().date())
+    up_zip = st.file_uploader("Upload Watershed (ZIP)", type="zip")
+    
     if up_zip:
         with tempfile.TemporaryDirectory() as td:
             with zipfile.ZipFile(up_zip, 'r') as z: z.extractall(td)
@@ -126,39 +128,44 @@ with st.sidebar:
             if shps:
                 st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
                 b = st.session_state.active_gdf.total_bounds
-                st.session_state.map_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=11)
+                st.session_state.map_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=10)
 
-    if st.button("PROCESS RADAR", use_container_width=True):
+    if st.button("PROCESS RADAR DATA", use_container_width=True):
         if st.session_state.active_gdf is not None:
-            s_dt = datetime.combine(s_date, datetime.min.time()) + timedelta(hours=19)
-            tr = pd.date_range(s_dt, s_dt + timedelta(hours=2), freq='15min')
+            s_dt = datetime.combine(s_date, datetime.min.time()) + timedelta(hours=12) # Midday start
+            tr = pd.date_range(s_dt, s_dt + timedelta(hours=6), freq='15min')
             cache, stats = {}, []
             for ts in tr:
-                path, val, bnds = get_radar_image(ts + timedelta(hours=5))
+                path, val, bnd = get_radar_image(ts + timedelta(hours=5))
                 if path:
-                    cache[ts.strftime("%H:%M")] = {"path": path, "bounds": bnds}
-                    stats.append({"time": ts, "rain_in": val})
+                    cache[ts.strftime("%H:%M")] = {"path": path, "bounds": bnd}
+                    stats.append({"time": ts, "rain": val})
             st.session_state.radar_cache, st.session_state.time_list, st.session_state.processed_df = cache, list(cache.keys()), pd.DataFrame(stats)
 
     if st.session_state.processed_df is not None:
-        if st.button("SHOW PLOT", use_container_width=True):
+        if st.button("SHOW RAINFALL PLOT", use_container_width=True):
             import plotly.express as px
-            @st.dialog("Rainfall Statistics", width="large")
+            @st.dialog("Basin Rain Statistics", width="large")
             def modal():
-                st.plotly_chart(px.bar(st.session_state.processed_df, x='time', y='rain_in', template="plotly_dark"), use_container_width=True)
+                st.plotly_chart(px.bar(st.session_state.processed_df, x='time', y='rain', template="plotly_dark"), use_container_width=True)
             modal()
 
-# --- 5. RENDER MAP ---
+# --- 4. MAP RENDER ---
 if st.session_state.time_list:
     t_idx = st.select_slider("Timeline", options=range(len(st.session_state.time_list)), 
                              format_func=lambda x: st.session_state.time_list[x], label_visibility="collapsed")
     curr = st.session_state.radar_cache[st.session_state.time_list[t_idx]]
-    layers = [pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7)]
+    layers = [
+        pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7),
+        pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255,255,255], line_width_min_pixels=2)
+    ]
 else:
     layers = []
+    if st.session_state.active_gdf is not None:
+        layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255,255,255], line_width_min_pixels=2))
 
 st.pydeck_chart(pdk.Deck(
     layers=layers, 
     initial_view_state=st.session_state.map_view, 
-    map_style="mapbox://styles/mapbox/dark-v10"
-), key="radar_map")
+    map_style="mapbox://styles/mapbox/dark-v11"
+), key="full_screen_map")
