@@ -14,10 +14,31 @@ from datetime import datetime, timedelta
 import leafmap.foliumap as leafmap
 import plotly.express as px
 
-# --- APP CONFIG ---
+# --- 1. PAGE CONFIG & FULL-SCREEN CSS ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🌧️")
 
-# Initialize Session State
+# This CSS removes the padding at the top and sides, and hides the scrollbar 
+# to make the map feel like a native desktop GIS application.
+st.markdown("""
+    <style>
+        /* Remove margins from the main content area */
+        .block-container {
+            padding-top: 0rem !important;
+            padding-bottom: 0rem !important;
+            padding-left: 0rem !important;
+            padding-right: 0rem !important;
+        }
+        /* Hide the Streamlit header */
+        header {visibility: hidden;}
+        /* Make the map container fill the available height */
+        iframe {
+            width: 100% !important;
+            height: 85vh !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. SESSION STATE INITIALIZATION ---
 if 'processed_df' not in st.session_state:
     st.session_state.processed_df = None
 if 'raster_cache' not in st.session_state:
@@ -25,10 +46,8 @@ if 'raster_cache' not in st.session_state:
 if 'time_list' not in st.session_state:
     st.session_state.time_list = []
 
-# --- CORE FUNCTIONS ---
-
+# --- 3. CORE PROCESSING FUNCTIONS ---
 def get_tz_offset(dt):
-    # Standard NJ logic (EDT=4, EST=5)
     edt_start = datetime(dt.year, 3, 8 + (6 - datetime(dt.year, 3, 1).weekday()) % 7)
     edt_end = datetime(dt.year, 11, 1 + (6 - datetime(dt.year, 11, 1).weekday()) % 7)
     return 4 if edt_start <= dt < edt_end else 5
@@ -60,24 +79,21 @@ def download_s3_grib(file_type, dt_local):
         if os.path.exists(tmp_path): os.remove(tmp_path)
     return None
 
-# --- SIDEBAR: INPUTS ---
+# --- 4. SIDEBAR CONTROLS ---
 with st.sidebar:
-    st.header("1. Selection")
+    st.title("🌧️ CNR Portal")
+    st.header("1. Time Window")
     
-    col1, col2 = st.columns(2)
-    start_date = col1.date_input("Start Date", datetime.now() - timedelta(days=2))
-    start_time = col2.time_input("Start Time", value=datetime.strptime("00:00", "%H:%M").time())
+    c1, c2 = st.columns(2)
+    start_dt = datetime.combine(c1.date_input("Start", datetime.now() - timedelta(days=2)), 
+                                c2.time_input("T1", value=datetime.strptime("00:00", "%H:%M").time()))
     
-    col3, col4 = st.columns(2)
-    end_date = col3.date_input("End Date", datetime.now() - timedelta(days=1))
-    end_time = col4.time_input("End Time", value=datetime.strptime("23:45", "%H:%M").time())
-    
-    start_dt = datetime.combine(start_date, start_time)
-    end_dt = datetime.combine(end_date, end_time)
+    c3, c4 = st.columns(2)
+    end_dt = datetime.combine(c3.date_input("End", datetime.now() - timedelta(days=1)), 
+                              c4.time_input("T2", value=datetime.strptime("23:45", "%H:%M").time()))
 
-    st.divider()
     st.header("2. Boundary")
-    uploaded_zip = st.file_uploader("Import Boundaries (ZIP)", type="zip")
+    uploaded_zip = st.file_uploader("Upload ZIP Shapefile", type="zip")
     
     active_gdf = None
     if uploaded_zip:
@@ -87,70 +103,59 @@ with st.sidebar:
             shps = list(Path(tmp_dir).rglob("*.shp"))
             if shps:
                 active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
-                st.success(f"Loaded {len(active_gdf)} polygons")
+                st.success("Boundary Ready")
 
-    st.divider()
-    if st.button("🚀 Process & Export", use_container_width=True):
-        if active_gdf is None:
-            st.error("Missing Shapefile!")
-        else:
-            with st.spinner("Downloading Radar Data..."):
+    if st.button("🚀 Process Data", use_container_width=True):
+        if active_gdf is not None:
+            with st.spinner("Extracting..."):
                 time_range = pd.date_range(start_dt, end_dt, freq='15min')
-                temp_rasters = {}
-                series_list = []
+                temp_rasters, series_list = {}, []
                 
                 prog = st.progress(0)
                 for i, ts in enumerate(time_range):
                     da = download_s3_grib("RO", ts)
                     if da is not None:
-                        # Save temp TIFF for map
                         t_tif = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
                         da.rio.to_raster(t_tif)
-                        time_str = ts.strftime("%Y-%m-%d %H:%M")
-                        temp_rasters[time_str] = t_tif
-                        
-                        # Clip and calculate mean
+                        temp_rasters[ts.strftime("%Y-%m-%d %H:%M")] = t_tif
                         clipped = da.rio.clip(active_gdf.geometry, active_gdf.crs, all_touched=True)
                         series_list.append({"time": ts, "rain_in": clipped.mean().item() / 25.4})
-                    
                     prog.progress((i + 1) / len(time_range))
                 
                 st.session_state.processed_df = pd.DataFrame(series_list).set_index("time")
                 st.session_state.raster_cache = temp_rasters
                 st.session_state.time_list = list(temp_rasters.keys())
+        else:
+            st.warning("Upload a ZIP first")
 
-# --- MAIN PAGE ---
+# --- 5. MAIN PAGE: FULL-WIDTH MAP ---
 
-# 1. Visualization Controls (Only show after processing)
+# Time Slider (only appears if data is ready)
 view_time = None
 if st.session_state.time_list:
-    view_time = st.select_slider("🕰️ Visualizer Slider:", options=st.session_state.time_list)
+    view_time = st.select_slider("Select Radar Timestamp", options=st.session_state.time_list)
 
-# 2. The Map
 m = leafmap.Map(center=[40.1, -74.5], zoom=8)
 
 if view_time and view_time in st.session_state.raster_cache:
-    m.add_raster(st.session_state.raster_cache[view_time], layer_name="Radar Layer", colormap="terrain", opacity=0.6)
+    m.add_raster(st.session_state.raster_cache[view_time], layer_name="Radar", colormap="terrain", opacity=0.6)
 
 if active_gdf is not None:
-    m.add_gdf(active_gdf, layer_name="Boundaries")
-    # If it's a new upload, center the map
+    m.add_gdf(active_gdf, layer_name="User Boundary")
+    # Auto-zoom on first load
     if not st.session_state.time_list:
         m.zoom_to_gdf(active_gdf)
 
-m.to_streamlit(height=600)
+# responsive=True + the CSS above makes this full-screen
+m.to_streamlit(responsive=True)
 
-# 3. Results Section
+# --- 6. RESULTS SECTION (BELOW MAP) ---
 if st.session_state.processed_df is not None:
-    st.divider()
-    col_a, col_b = st.columns([2, 1])
-    
-    with col_a:
-        fig = px.bar(st.session_state.processed_df.reset_index(), x="time", y="rain_in", title="Rainfall depth (inches)")
+    st.markdown("### 📊 Rain Analysis")
+    col_plot, col_stats = st.columns([3, 1])
+    with col_plot:
+        fig = px.bar(st.session_state.processed_df.reset_index(), x="time", y="rain_in", template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
-    
-    with col_b:
-        st.subheader("Stats & Export")
-        st.dataframe(st.session_state.processed_df.describe())
-        csv_data = st.session_state.processed_df.to_csv().encode('utf-8')
-        st.download_button("📥 Download CSV", csv_data, "rainfall_results.csv", "text/csv")
+    with col_stats:
+        st.download_button("📥 Export CSV", st.session_state.processed_df.to_csv().encode('utf-8'), "radar_rain.csv", use_container_width=True)
+        st.dataframe(st.session_state.processed_df.describe(), use_container_width=True)
