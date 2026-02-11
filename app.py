@@ -351,7 +351,7 @@ if st.session_state.active_gdf is not None:
 deck = pdk.Deck(
     layers=layers,
     initial_view_state=st.session_state.map_view,
-    map_style="mapbox://styles/mapbox/dark-v11"
+    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
 )
 
 # Render with explicit height - CSS will make it 100vh but this prevents initial clamp
@@ -388,3 +388,4 @@ if st.session_state.time_list:
     
     with col3:
         st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
+
