@@ -187,6 +187,9 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+if "current_time_label" not in st.session_state:
+    st.session_state.current_time_label = None
+
 
 
 RADAR_COLORS = ["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"]
@@ -430,6 +433,8 @@ with st.sidebar:
             st.session_state.current_time_index = 0
             st.session_state.radar_cache = cache
             st.session_state.time_list = sorted(cache.keys())
+            st.session_state.time_list = sorted(cache.keys())
+            st.session_state.current_time_label = st.session_state.time_list[0] if st.session_state.time_list else None
             st.session_state.current_time_index = 0
             st.session_state.is_playing = False
             st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
@@ -450,91 +455,87 @@ if st.session_state.is_playing:
 
 # --- MAP DISPLAY ---
 layers = []
-if st.session_state.time_list:
-    curr = st.session_state.radar_cache[st.session_state.time_list[st.session_state.current_time_index]]
-    layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
+
+if st.session_state.time_list and st.session_state.current_time_label:
+    # safety: if label disappeared, fall back
+    if st.session_state.current_time_label not in st.session_state.time_list:
+        st.session_state.current_time_label = st.session_state.time_list[0]
+
+    curr = st.session_state.radar_cache[st.session_state.current_time_label]
+    layers.append(pdk.Layer(
+        "BitmapLayer",
+        image=curr["path"],
+        bounds=curr["bounds"],
+        opacity=0.70
+    ))
+
 if st.session_state.active_gdf is not None:
-    layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
+    layers.append(pdk.Layer(
+        "GeoJsonLayer",
+        st.session_state.active_gdf.__geo_interface__,
+        stroked=True,
+        filled=False,
+        get_line_color=[255, 255, 255],
+        line_width_min_pixels=3
+    ))
 
-st.pydeck_chart(pdk.Deck(
-    layers=layers, 
-    initial_view_state=st.session_state.map_view, 
+deck = pdk.Deck(
+    layers=layers,
+    initial_view_state=st.session_state.map_view,
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-), width="stretch", height=1000, key="map")
+)
 
-import streamlit.components.v1 as components
+# IMPORTANT: force a re-mount when time changes
+deck_key = f"map_{st.session_state.current_time_label}"
+st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
+
 
 # =============================
 # 7) FLOATING CONTROLS
 # =============================
-if st.session_state.time_list:
+import streamlit.components.v1 as components
 
-    # 1) Create the controls in a real Streamlit container
+if st.session_state.time_list:
     with st.container():
         st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
 
-        col_play, col_slider, col_txt = st.columns([1, 10, 3])
-
-        with col_play:
-            btn_icon = "⏸" if st.session_state.is_playing else "▶"
-            if st.button(btn_icon, key="play_btn"):
-                st.session_state.is_playing = not st.session_state.is_playing
-                st.rerun()
+        col_slider, col_txt = st.columns([12, 3])
 
         with col_slider:
-            time_list = st.session_state.get("time_list", [])
-            n = len(time_list)
-            if n == 0:
-                st.stop()
-        
-            # clamp
-            st.session_state.current_time_index = max(
-                0, min(int(st.session_state.current_time_index), n - 1)
-            )
-        
-            cur_label = time_list[st.session_state.current_time_index]
-        
             chosen = st.select_slider(
                 "Timeline",
-                options=time_list,          # IMPORTANT: labels directly
-                value=cur_label,
+                options=st.session_state.time_list,
+                value=st.session_state.current_time_label or st.session_state.time_list[0],
                 label_visibility="collapsed",
                 key="timeline_slider"
             )
-        
-            if chosen != cur_label:
-                st.session_state.current_time_index = time_list.index(chosen)
-                st.session_state.is_playing = False
+            if chosen != st.session_state.current_time_label:
+                st.session_state.current_time_label = chosen
                 st.rerun()
 
         with col_txt:
-            ts = st.session_state.time_list[st.session_state.current_time_index]
+            ts = st.session_state.current_time_label or ""
             st.markdown(
                 f'<p class="timestamp" style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
                 unsafe_allow_html=True
             )
 
-
-    # 2) Inject JS AFTER the container exists (outside the container block)
+    # your existing JS that adds .floating-controls stays the same
     components.html("""
     <script>
     (function() {
       const doc = window.parent.document;
       const anchor = doc.querySelector('#control_bar_anchor');
       if (!anchor) return;
-
-      // Go up to the nearest Streamlit "block"/widget container
       const wrap =
         anchor.closest('[data-testid="stVerticalBlock"]') ||
         anchor.closest('.element-container') ||
         anchor.parentElement;
-
       if (!wrap) return;
       wrap.classList.add('floating-controls');
     })();
     </script>
     """, height=0)
-
 
 # =============================
 # 8) OUTPUTS (STYLIZED BAR CHART)
@@ -566,6 +567,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
