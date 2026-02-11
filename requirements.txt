@@ -9,3 +9,5 @@ rioxarray
 pydeck
 matplotlib
 plotly
+folium
+streamlit-folium
