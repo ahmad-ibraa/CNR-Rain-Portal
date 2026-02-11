@@ -428,7 +428,7 @@ with st.sidebar:
             msg.info("Aligning RO grid to MRMS grid…")
             
             # Force RO spatial grid to match MRMS
-            ro = ro.interp_like(mrms.isel(time=0), method="nearest")
+            ro = ro.reindex_like(mrms.isel(time=0), method="nearest")
             
             ro = ro.astype("float32")
             mrms = mrms.astype("float32")
@@ -470,7 +470,7 @@ with st.sidebar:
                 ro_slice   = ro_hourly_da.isel(time=i)
             
                 # guarantee same grid (defensive)
-                ro_slice = ro_slice.interp_like(mrms_slice)
+                ro_slice = ro_slice.reindex_like(mrms_slice)
             
                 ratio = xr.where(ro_slice > eps, mrms_slice / ro_slice, 0.0)
                 ratio = ratio.where(np.isfinite(ratio), 0.0)
@@ -634,4 +634,5 @@ if st.session_state.time_list:
 
         with c3:
             st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
+
 
