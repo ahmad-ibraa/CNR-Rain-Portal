@@ -131,13 +131,11 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
 )
 st.markdown("""
 <style>
-/* Ensure map stays clickable */
-#deckgl-wrapper, #deckgl-wrapper canvas{
-  pointer-events:auto !important;
-}
+/* map still interactive */
+#deckgl-wrapper, #deckgl-wrapper canvas { pointer-events:auto !important; }
 
-/* FLOATING CONTROL BAR (match ancestor even if nested) */
-div:has(#control_bar_anchor){
+/* the one container JS tags */
+.floating-controls{
   position: fixed !important;
   left: 420px !important;
   right: 18px !important;
@@ -151,21 +149,11 @@ div:has(#control_bar_anchor){
   pointer-events: auto !important;
 }
 
-/* Make sure widgets inside are clickable */
-div:has(#control_bar_anchor) *{
-  pointer-events: auto !important;
-}
-
-/* Round Play/Pause Button */
-div:has(#control_bar_anchor) .stButton button{
-  border-radius: 999px !important;
-  width: 44px !important;
-  height: 44px !important;
-  padding: 0 !important;
-  font-size: 18px !important;
-}
+.floating-controls *{ pointer-events:auto !important; }
 </style>
 """, unsafe_allow_html=True)
+
+
 
 
 # =============================
@@ -446,12 +434,15 @@ st.pydeck_chart(pdk.Deck(
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
 ), use_container_width=True, height=1000)
 
+import streamlit.components.v1 as components
+
 # =============================
 # 7) FLOATING CONTROLS
 # =============================
 if st.session_state.time_list:
+
+    # 1) Create the controls in a real Streamlit container
     with st.container():
-        # anchor that lets CSS "grab" THIS container and make it fixed
         st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
 
         col_play, col_slider, col_txt = st.columns([1, 10, 3])
@@ -483,6 +474,27 @@ if st.session_state.time_list:
                 unsafe_allow_html=True
             )
 
+    # 2) Inject JS AFTER the container exists (outside the container block)
+    components.html("""
+    <script>
+    (function() {
+      const doc = window.parent.document;
+      const anchor = doc.querySelector('#control_bar_anchor');
+      if (!anchor) return;
+
+      // Go up to the nearest Streamlit "block"/widget container
+      const wrap =
+        anchor.closest('[data-testid="stVerticalBlock"]') ||
+        anchor.closest('.element-container') ||
+        anchor.parentElement;
+
+      if (!wrap) return;
+      wrap.classList.add('floating-controls');
+    })();
+    </script>
+    """, height=0)
+
+
 # =============================
 # 8) OUTPUTS (STYLIZED BAR CHART)
 # =============================
@@ -513,6 +525,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
