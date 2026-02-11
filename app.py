@@ -15,60 +15,65 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
-# --- 1. PAGE CONFIG & AGGRESSIVE FULL-SCREEN CSS ---
+# --- 1. PAGE CONFIG & OVERLAY CSS ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal")
 
 st.markdown("""
     <style>
-        /* Force the app to use 100% of the browser width */
-        .block-container { 
-            padding: 0rem !important; 
-            max-width: 100vw !important; 
+        /* 1. Make the background of the whole app the Map */
+        .main .block-container {
+            max-width: 100vw !important;
+            padding: 0 !important;
+            margin: 0 !important;
         }
-        
-        /* Hide UI clutter */
-        header, footer { display: none !important; }
-        
-        /* Force the Map to fill the screen */
-        div[data-testid="stPydeckChart"], iframe {
+
+        /* 2. Force Map to be the absolute background layer */
+        iframe[title="pydeck.io"] {
             height: 100vh !important;
             width: 100vw !important;
             position: fixed !important;
-            top: 0;
-            left: 0;
+            top: 0 !important;
+            left: 0 !important;
+            z-index: 0 !important;
         }
 
-        /* Float the slider at the bottom so it doesn't push the map up */
+        /* 3. Make the Sidebar a transparent glass overlay */
+        [data-testid="stSidebar"] {
+            background-color: rgba(20, 20, 20, 0.7) !important;
+            backdrop-filter: blur(10px); /* Modern frosted glass effect */
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+        }
+
+        /* 4. Hide standard Streamlit header/footer */
+        header, footer { visibility: hidden !important; }
+
+        /* 5. Floating Timeline Slider styling */
         .stSlider {
             position: fixed;
-            bottom: 30px;
-            left: 320px; /* Offset for sidebar */
-            right: 50px;
+            bottom: 40px;
+            left: 360px; 
+            right: 40px;
             z-index: 1000;
-            background: rgba(25, 25, 25, 0.8);
-            padding: 10px 25px;
-            border-radius: 15px;
-            border: 1px solid #444;
+            background: rgba(15, 15, 15, 0.8);
+            padding: 10px 30px;
+            border-radius: 50px;
         }
 
-        /* Style the Sidebar Button to be a large, wide rectangle */
+        /* 6. Clean, wide Sidebar buttons */
         div.stButton > button {
             width: 100% !important;
-            height: 60px !important;
-            font-size: 18px !important;
+            height: 55px !important;
+            background-color: #ff4b4b !important;
+            color: white !important;
+            border: none !important;
             font-weight: bold !important;
-            margin-top: 10px;
-        }
-
-        /* Make the Dialog (Graph) much larger */
-        div[data-testid="stDialog"] div[role="dialog"] {
-            width: 80vw !important;
-            max-width: 1200px !important;
+            text-transform: uppercase;
         }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. COLORS & PERSISTENT STATE ---
+# --- 2. COLORS & STATE ---
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
@@ -79,7 +84,7 @@ if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
 if 'map_view' not in st.session_state: 
     st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 
-# --- 3. DATA ENGINE (15-min) ---
+# --- 3. DATA ENGINE ---
 def get_radar_image(dt_utc):
     ts_str = dt_utc.strftime("%Y%m%d-%H%M00") 
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
@@ -114,17 +119,17 @@ def get_radar_image(dt_utc):
     finally:
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
-# --- 4. SIDEBAR ---
+# --- 4. SIDEBAR OVERLAY ---
 with st.sidebar:
     st.title("CNR GIS Portal")
     tz_mode = st.radio("Timezone", ["Local (EST/EDT)", "UTC"])
     s_date = st.date_input("Start Date", value=datetime.now().date())
     e_date = st.date_input("End Date", value=datetime.now().date())
     
-    hours = [f"{h:02d}:00" for h in range(24)]
     c1, c2 = st.columns(2)
-    s_time = c1.selectbox("Start Hour", hours, index=19)
-    e_time = c2.selectbox("End Hour", hours, index=21)
+    hours = [f"{h:02d}:00" for h in range(24)]
+    s_time = c1.selectbox("Start", hours, index=19)
+    e_time = c2.selectbox("End", hours, index=21)
     
     up_zip = st.file_uploader("Upload Watershed ZIP", type="zip")
     if up_zip:
@@ -160,7 +165,7 @@ with st.sidebar:
 
     if st.session_state.processed_df is not None:
         st.write("---")
-        if st.button("SHOW PLOT", type="primary"):
+        if st.button("SHOW PLOT"):
             import plotly.express as px
             @st.dialog("Rainfall Statistics", width="large")
             def modal():
@@ -169,12 +174,10 @@ with st.sidebar:
                 st.plotly_chart(fig, use_container_width=True)
             modal()
 
-# --- 5. MAIN MAP ---
+# --- 5. BACKGROUND MAP ---
 if st.session_state.time_list:
-    # Floating Slider (Positioned via CSS)
-    t_idx = st.select_slider("Select Time", options=range(len(st.session_state.time_list)),
+    t_idx = st.select_slider("Timeline", options=range(len(st.session_state.time_list)),
                              format_func=lambda x: st.session_state.time_list[x], label_visibility="collapsed")
-    
     current_data = st.session_state.radar_cache[st.session_state.time_list[t_idx]]
     layers = [
         pdk.Layer("BitmapLayer", image=current_data["path"], bounds=current_data["bounds"], opacity=0.7),
@@ -187,7 +190,6 @@ else:
         layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                                 stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
-# Using a constant 'key' in st.pydeck_chart is the secret to stopping the flickering/resetting
 st.pydeck_chart(pdk.Deck(
     layers=layers, 
     initial_view_state=st.session_state.map_view, 
