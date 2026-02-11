@@ -14,57 +14,39 @@ from datetime import datetime, timedelta
 import leafmap.foliumap as leafmap
 import plotly.express as px
 
-# --- 1. PAGE CONFIG ---
+# --- 1. PAGE CONFIG & PERSISTENT STYLE ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
 
-# --- 2. THE CSS FIX (No more squishing) ---
 st.markdown("""
     <style>
-        /* Remove the 'paper' margins around the app */
-        .block-container {
-            padding-top: 1rem !important;
-            padding-bottom: 0rem !important;
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
-        }
-        
-        /* Ensure the sidebar toggle is always visible and floating */
-        [data-testid="stSidebarCollapsedControl"] {
-            background-color: #262730;
-            color: white;
-            border-radius: 0 5px 5px 0;
-            top: 10px;
-            display: flex !important;
-        }
-
-        /* Target the map specifically to take up a massive amount of height */
-        /* Using 85vh here prevents the 'squishing' while filling the screen */
-        iframe {
-            height: 85vh !important;
-            width: 100% !important;
-        }
+        .block-container { padding: 1rem !important; }
+        iframe { height: 75vh !important; width: 100% !important; }
+        [data-testid="stSidebarCollapsedControl"] { display: flex !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. SESSION STATE ---
+# --- 2. INITIALIZE SESSION STATE (The "No-Refresh" Brain) ---
 if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'raster_cache' not in st.session_state: st.session_state.raster_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
+if 'shp_name' not in st.session_state: st.session_state.shp_name = "output"
+if 'map_center' not in st.session_state: st.session_state.map_center = [40.1, -74.5]
+if 'map_zoom' not in st.session_state: st.session_state.map_zoom = 7
 
-# --- 4. HELPERS ---
-def get_tz_offset(dt):
-    edt_s = datetime(dt.year, 3, 8 + (6 - datetime(dt.year, 3, 1).weekday()) % 7)
-    edt_e = datetime(dt.year, 11, 1 + (6 - datetime(dt.year, 11, 1).weekday()) % 7)
-    return 4 if edt_s <= dt < edt_e else 5
+# Default dates to avoid resetting to "today"
+if 'start_d' not in st.session_state: st.session_state.start_d = datetime.now() - timedelta(days=2)
+if 'end_d' not in st.session_state: st.session_state.end_d = datetime.now() - timedelta(days=1)
 
+# --- 3. UPDATED CORE FUNCTIONS ---
 def download_s3_grib(file_type, dt_local):
-    offset = get_tz_offset(dt_local)
+    # EDT/EST logic
+    edt_s = datetime(dt_local.year, 3, 8 + (6 - datetime(dt_local.year, 3, 1).weekday()) % 7)
+    edt_e = datetime(dt_local.year, 11, 1 + (6 - datetime(dt_local.year, 11, 1).weekday()) % 7)
+    offset = 4 if edt_s <= dt_local < edt_e else 5
     dt_utc = dt_local + timedelta(hours=offset)
-    s3_path = dt_utc.strftime("%Y%m%d")
+    
     ts = dt_utc.strftime("%Y%m%d-%H%M00")
-    base = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS"
-    f_prefix = "RadarOnly_QPE_15M" if file_type == "RO" else "MultiSensor_QPE_01H_Pass2"
-    url = f"{base}/{f_prefix}_00.00/{s3_path}/MRMS_{f_prefix}_00.00_{ts}.grib2.gz"
+    url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts}.grib2.gz"
 
     tmp = tempfile.NamedTemporaryFile(suffix=".grib2", delete=False).name
     try:
@@ -75,20 +57,20 @@ def download_s3_grib(file_type, dt_local):
             with xr.open_dataset(tmp, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
                 da = ds[list(ds.data_vars)[0]].load()
                 da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
+                # Filter out no-rain values to make map clearer
+                da = da.where(da > 0)
                 return da.rio.write_crs("EPSG:4326")
     except: return None
     finally:
         if os.path.exists(tmp): os.remove(tmp)
     return None
 
-# --- 5. SIDEBAR ---
+# --- 4. SIDEBAR (PERSISTENT INPUTS) ---
 with st.sidebar:
-    st.title("🛰️ CNR Rain Portal")
+    st.title("🛰️ CNR Portal")
     
-    c1, c2 = st.columns(2)
-    s_dt = datetime.combine(c1.date_input("Start", datetime.now()-timedelta(2)), c2.time_input("T1", datetime.min.time()))
-    c3, c4 = st.columns(2)
-    e_dt = datetime.combine(c3.date_input("End", datetime.now()-timedelta(1)), c4.time_input("T2", datetime.max.time()))
+    st.session_state.start_d = st.date_input("Start Date", st.session_state.start_d)
+    st.session_state.end_d = st.date_input("End Date", st.session_state.end_d)
     
     up_zip = st.file_uploader("Upload ZIP Shapefile", type="zip")
     active_gdf = None
@@ -97,13 +79,13 @@ with st.sidebar:
             with zipfile.ZipFile(up_zip, 'r') as z: z.extractall(td)
             shps = list(Path(td).rglob("*.shp"))
             if shps:
+                st.session_state.shp_name = shps[0].stem
                 active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
-                st.success("Geometry Ready")
 
-    if st.button("🚀 Process & Export", use_container_width=True):
+    if st.button("🚀 Process Data", use_container_width=True):
         if active_gdf is not None:
-            with st.spinner("Processing..."):
-                tr = pd.date_range(s_dt, e_dt, freq='15min')
+            with st.spinner("Fetching CONUS Radar..."):
+                tr = pd.date_range(st.session_state.start_d, st.session_state.end_d, freq='15min')
                 rc, sl = {}, []
                 pb = st.progress(0)
                 for i, ts in enumerate(tr):
@@ -111,34 +93,47 @@ with st.sidebar:
                     if da is not None:
                         tf = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
                         da.rio.to_raster(tf)
-                        rc[ts.strftime("%Y-%m-%d %H:%M")] = tf
-                        sl.append({"time": ts, "rain_in": da.rio.clip(active_gdf.geometry, active_gdf.crs).mean().item()/25.4})
+                        rc[ts.strftime("%H:%M")] = tf
+                        # Calculate clipped mean for CSV, but keep 'da' full for map
+                        clipped = da.rio.clip(active_gdf.geometry, active_gdf.crs, all_touched=True)
+                        sl.append({"time": ts, "rain_in": clipped.mean().item()/25.4})
                     pb.progress((i+1)/len(tr))
-                st.session_state.processed_df, st.session_state.raster_cache, st.session_state.time_list = pd.DataFrame(sl).set_index("time"), rc, list(rc.keys())
+                st.session_state.processed_df = pd.DataFrame(sl).set_index("time")
+                st.session_state.raster_cache = rc
+                st.session_state.time_list = list(rc.keys())
+        else: st.warning("Upload ZIP first")
 
+    # --- SHOW OUTPUT FILES FIELD ---
     if st.session_state.processed_df is not None:
-        st.divider()
-        st.download_button("📥 Download CSV Output", st.session_state.processed_df.to_csv().encode('utf-8'), "rainfall.csv", use_container_width=True)
+        st.subheader("📁 Output Files")
+        fname = f"rainfall_{st.session_state.shp_name}.csv"
+        csv_bytes = st.session_state.processed_df.to_csv().encode('utf-8')
+        st.download_button(label=f"📄 {fname}", data=csv_bytes, file_name=fname, mime="text/csv")
 
-# --- 6. MAIN CONTENT ---
+# --- 5. MAIN CONTENT (MAP & ANIMATION) ---
+m = leafmap.Map(center=st.session_state.map_center, zoom=st.session_state.map_zoom)
 
-# Display the Time Slider at the VERY TOP of the main page
-view_t = None
-if st.session_state.time_list:
-    view_t = st.select_slider("🕰️ Select Radar Time", options=st.session_state.time_list)
-
-# The Map
-m = leafmap.Map(center=[40.1, -74.5], zoom=8)
+# Add user boundary
 if active_gdf is not None:
-    m.add_gdf(active_gdf, layer_name="Boundary")
-    if not st.session_state.time_list: m.zoom_to_gdf(active_gdf)
+    m.add_gdf(active_gdf, layer_name="Site Boundary")
 
-if view_t and view_t in st.session_state.raster_cache:
-    m.add_raster(st.session_state.raster_cache[view_t], layer_name="Radar", colormap="jet", opacity=0.5)
+# TIME SLIDER WITH PLAY BUTTON
+if st.session_state.time_list:
+    # Use leafmap's native time slider for the Play/Pause feature
+    # We pass the full CONUS raster paths from our cache
+    m.add_time_slider(
+        st.session_state.raster_cache, 
+        labels=st.session_state.time_list,
+        time_interval=500 # ms between frames
+    )
 
-# Render Map
-m.to_streamlit(responsive=True)
+# CAPTURE MAP MOVEMENT (To prevent reset on refresh)
+# This is a Streamlit-Leafmap specific trick to remember where you panned
+map_data = m.to_streamlit()
+if map_data and 'center' in map_data:
+    st.session_state.map_center = [map_data['center']['lat'], map_data['center']['lng']]
+    st.session_state.map_zoom = map_data['zoom']
 
-# Statistics bar chart (if data exists)
+# --- 6. STATS ---
 if st.session_state.processed_df is not None:
     st.plotly_chart(px.bar(st.session_state.processed_df.reset_index(), x="time", y="rain_in", template="plotly_dark"), use_container_width=True)
