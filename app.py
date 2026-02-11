@@ -267,6 +267,7 @@ defaults = {
     "show_munis": True,            # toggle default
     "search_query": "",            # city search text
     "mode": "select",   # "select" (folium) or "view" (pydeck)
+    "muni_active_name": None,     # currently selected muni
 
 }
 for k, v in defaults.items():
@@ -290,7 +291,9 @@ MUNI_GEOJSON_PATH = "nj_munis.geojson"  # <-- change to your actual repo path
 MUNI_NAME_FIELD = "GNIS_NAME"
 
 
-def render_muni_picker_map(muni_geojson: dict, center=(40.1, -74.6), zoom=8):
+def render_muni_picker_map(muni_gdf: gpd.GeoDataFrame, center=(40.1, -74.6), zoom=8):
+    muni_geojson = gdf_to_geojson_dict(muni_gdf)
+
     m = folium.Map(location=center, zoom_start=zoom, tiles="CartoDB dark_matter")
 
     folium.GeoJson(
@@ -312,16 +315,36 @@ def render_muni_picker_map(muni_geojson: dict, center=(40.1, -74.6), zoom=8):
 
     folium.LayerControl(collapsed=True).add_to(m)
 
-    out = st_folium(m, width=None, height=950, returned_objects=["last_clicked"])
-    clicked = out.get("last_clicked")
+    # IMPORTANT: last_object_clicked contains feature + properties
+    out = st_folium(
+        m,
+        height=950,
+        width=None,
+        key="muni_map",
+        returned_objects=["last_object_clicked"],
+    )
 
+    clicked = out.get("last_object_clicked")
     if clicked and isinstance(clicked, dict):
-        props = clicked.get("properties", {}) or {}
+        props = clicked.get("properties") or {}
         name = props.get(MUNI_NAME_FIELD)
 
-        if name and name not in st.session_state.selected_munis:
-            st.session_state.selected_munis.append(name)
-            st.rerun()
+        if name:
+            # make it behave exactly like an uploaded shapefile
+            sel = muni_gdf.loc[muni_gdf[MUNI_NAME_FIELD] == name].copy()
+            if not sel.empty:
+                st.session_state.active_gdf = sel
+                st.session_state.muni_active_name = name
+
+                # auto-zoom to it
+                b = sel.total_bounds
+                st.session_state.map_view = pdk.ViewState(
+                    latitude=(b[1] + b[3]) / 2,
+                    longitude=(b[0] + b[2]) / 2,
+                    zoom=11
+                )
+                st.session_state.mode = "view"
+                st.rerun()
 
 
 def load_munis_geojson(path: str) -> dict:
@@ -463,6 +486,22 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
         clipped = sub.rio.clip(ws_gdf.geometry, ws_gdf.crs, drop=True)
         return float(clipped.mean().values) / 25.4 if clipped.size > 0 else float(da_full.mean().values) / 25.4
     except: return float(da_full.mean().values) / 25.4
+
+
+@st.cache_data(show_spinner=False)
+def load_munis_gdf(path: str) -> gpd.GeoDataFrame:
+    # read once; keep in EPSG:4326
+    gdf = gpd.read_file(path)
+    if gdf.crs is None:
+        gdf = gdf.set_crs("EPSG:4326")
+    else:
+        gdf = gdf.to_crs("EPSG:4326")
+    return gdf
+
+@st.cache_data(show_spinner=False)
+def gdf_to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
+    return gdf.__geo_interface__
+
 
 # =============================
 # 5) SIDEBAR UI
@@ -646,11 +685,10 @@ with st.sidebar:
 
 # ---- A) Folium municipality picker (BEFORE processing) ----
 if st.session_state.mode == "select":
-    st.markdown("### Municipality selection (click a polygon)")
     if st.session_state.show_munis:
-        muni_geojson = load_munis_geojson(MUNI_GEOJSON_PATH)
+        muni_gdf = load_munis_gdf("nj_munis.geojson")  # <-- your real file name/location
 
-        # pick a sensible center: use watershed if uploaded, else NJ-ish
+        # center: if watershed exists, center there, else NJ default
         if st.session_state.active_gdf is not None:
             b = st.session_state.active_gdf.total_bounds
             center = ((b[1] + b[3]) / 2, (b[0] + b[2]) / 2)
@@ -659,9 +697,21 @@ if st.session_state.mode == "select":
             center = (40.1, -74.6)
             zoom = 8
 
-        render_muni_picker_map(muni_geojson, center=center, zoom=zoom)
+        render_muni_picker_map(muni_gdf, center=center, zoom=zoom)
     else:
         st.info("Enable 'Show NJ Municipalities' to pick by click.")
+# --- "virtual upload" delete control ---
+if st.session_state.muni_active_name:
+    st.divider()
+    st.subheader("Active Boundary")
+    st.write(f"Municipality boundary (virtual): **{st.session_state.muni_active_name}**")
+
+    if st.button("Remove municipality boundary"):
+        st.session_state.muni_active_name = None
+        st.session_state.active_gdf = None
+        st.session_state.mode = "select"
+        st.rerun()
+
 
 # ---- B) PyDeck radar viewer (AFTER processing) ----
 else:
@@ -776,6 +826,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
