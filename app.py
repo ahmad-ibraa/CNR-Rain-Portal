@@ -14,34 +14,36 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# --- 1. PAGE CONFIG & AGGRESSIVE FULL-HEIGHT CSS ---
+# --- 1. PAGE CONFIG ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
 
+# --- 2. THE "IRONCLAD" CSS ---
+# This targets the entire Streamlit hierarchy to force the map to 85% of your screen
 st.markdown("""
     <style>
-        /* 1. Remove all padding from the main app container */
-        .block-container { 
-            padding-top: 1rem !important; 
-            padding-bottom: 0rem !important; 
-            padding-left: 2rem !important; 
-            padding-right: 2rem !important; 
-        }
-        
-        /* 2. Force the Pydeck container to be 85% of the screen height */
-        /* We target both the test-id and the internal iframe */
-        [data-testid="stPydeckChart"], .stPydeckChart, iframe {
-            height: 85vh !important;
-            min-height: 700px !important;
+        /* Force the main scroll area to be tight */
+        .main .block-container {
+            padding: 1rem 2rem 0rem 2rem !important;
+            max-width: 100% !important;
         }
 
-        /* 3. Ensure the map takes up the full width of its container */
-        .element-container, .stPydeckChart {
+        /* Target every possible wrapper of the Pydeck chart */
+        div[data-testid="stPydeckChart"], 
+        div[data-testid="stPydeckChart"] > div, 
+        iframe[title="pydeck.deck.Deck"] {
+            height: 85vh !important;
+            min-height: 800px !important;
             width: 100% !important;
+        }
+
+        /* Hide the decoration bar at the top to save space */
+        header[data-testid="stHeader"] {
+            display: none !important;
         }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SESSION STATE ---
+# --- 3. SESSION STATE ---
 if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'map_data_cache' not in st.session_state: st.session_state.map_data_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
@@ -49,7 +51,7 @@ if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
 if 'current_idx' not in st.session_state: st.session_state.current_idx = 0
 if 'playing' not in st.session_state: st.session_state.playing = False
 
-# --- 3. DATA PROCESSING ---
+# --- 4. DATA PROCESSING ---
 def get_mrms_points(dt_utc):
     ts_str = dt_utc.strftime("%Y%m%d-%H1500") 
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
@@ -72,7 +74,6 @@ def get_mrms_points(dt_utc):
                 clipped = da.rio.clip(st.session_state.active_gdf.geometry, "EPSG:4326")
                 site_mean = float(clipped.mean()) if not clipped.isnull().all() else 0.0
 
-            # Subsetting for Northeast US
             subset = da.sel(latitude=slice(43, 38), longitude=slice(-77, -71))
             df = subset.to_dataframe(name='val').reset_index()
             df = df[df['val'] > 0.1] 
@@ -81,12 +82,11 @@ def get_mrms_points(dt_utc):
     finally:
         if os.path.exists(tmp_path): os.remove(tmp_path)
 
-# --- 4. SIDEBAR ---
+# --- 5. SIDEBAR ---
 with st.sidebar:
     st.title("🛰️ CNR GIS Portal")
     tz_mode = st.radio("Timezone", ["Local (EST/EDT)", "UTC"])
     yesterday = datetime.now() - timedelta(days=1)
-    
     start_d = st.date_input("Start Date", value=yesterday.date())
     end_d = st.date_input("End Date", value=yesterday.date())
     
@@ -120,10 +120,8 @@ with st.sidebar:
             st.session_state.processed_df = pd.DataFrame(stats_list)
             st.session_state.map_data_cache = map_cache
             st.session_state.time_list = list(map_cache.keys())
-        else: st.warning("Upload Shapefile First")
 
-# --- 5. MAIN CONTENT (MAP) ---
-st.subheader("Radar GIS Viewer")
+# --- 6. MAIN CONTENT ---
 map_spot = st.empty()
 
 def render_deck(idx=0):
@@ -151,10 +149,10 @@ def render_deck(idx=0):
             map_style="light" 
         ), use_container_width=True)
 
-# Animation Controls
+# Animation / Timeline
 if st.session_state.time_list:
     cp, cs = st.columns([1, 5])
-    if cp.button("⏹️ Stop" if st.session_state.playing else "▶️ Play Animation"):
+    if cp.button("⏹️ Stop" if st.session_state.playing else "▶️ Play"):
         st.session_state.playing = not st.session_state.playing
         st.rerun()
     
@@ -175,7 +173,7 @@ if st.session_state.time_list:
 else:
     render_deck()
 
-# --- 6. CHART ---
+# --- 7. CHART ---
 if st.session_state.processed_df is not None and not st.session_state.processed_df.empty:
     import plotly.express as px
     st.plotly_chart(px.bar(st.session_state.processed_df, x='time', y='rain_in', 
