@@ -134,7 +134,7 @@ st.markdown("""
 /* map still interactive */
 #deckgl-wrapper, #deckgl-wrapper canvas { pointer-events:auto !important; }
 
-/* the one container JS tags */
+/* floating controls container (JS adds this class) */
 .floating-controls{
   position: fixed !important;
   left: 420px !important;
@@ -147,9 +147,23 @@ st.markdown("""
   border: 1px solid rgba(255,255,255,0.12) !important;
   backdrop-filter: blur(10px);
   pointer-events: auto !important;
+
+  box-sizing: border-box !important;
+  max-width: calc(100vw - 420px - 18px) !important;
+  overflow: hidden !important;
 }
 
 .floating-controls *{ pointer-events:auto !important; }
+
+/* allow Streamlit columns to shrink instead of overflow */
+.floating-controls [data-testid="column"]{ min-width: 0 !important; }
+
+/* timestamp truncation */
+.floating-controls .timestamp{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -424,7 +438,8 @@ if st.session_state.time_list and st.session_state.is_playing:
 layers = []
 if st.session_state.time_list:
     curr = st.session_state.radar_cache[st.session_state.time_list[st.session_state.current_time_index]]
-    layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
+    img_url = curr["path"] + f"?v={st.session_state.current_time_index}"
+    layers.append(pdk.Layer("BitmapLayer", image=img_url, bounds=curr["bounds"], opacity=0.70))
 if st.session_state.active_gdf is not None:
     layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
@@ -432,7 +447,7 @@ st.pydeck_chart(pdk.Deck(
     layers=layers, 
     initial_view_state=st.session_state.map_view, 
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-), use_container_width=True, height=1000)
+), use_container_width=True, height=1000, key="map")
 
 import streamlit.components.v1 as components
 
@@ -470,9 +485,10 @@ if st.session_state.time_list:
         with col_txt:
             ts = st.session_state.time_list[st.session_state.current_time_index]
             st.markdown(
-                f'<p style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
+                f'<p class="timestamp" style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
                 unsafe_allow_html=True
             )
+
 
     # 2) Inject JS AFTER the container exists (outside the container block)
     components.html("""
@@ -525,6 +541,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
