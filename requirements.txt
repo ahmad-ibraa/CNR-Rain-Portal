@@ -10,3 +10,4 @@ plotly
 eccodes
 rasterio
 localtileserver
+psutil
