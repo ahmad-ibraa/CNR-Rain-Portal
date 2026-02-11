@@ -25,7 +25,7 @@ import calendar
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar_state="expanded")
 
 # =============================
-# 2) CSS (fullscreen deck + locked sidebar + floating controls container)
+# 2) CSS (fullscreen deck + locked sidebar + floating controls via anchor)
 # =============================
 st.markdown(
     """
@@ -106,10 +106,10 @@ canvas.mapboxgl-canvas{
   height:100% !important;
 }
 
-/* ---- FLOATING CONTROLS BAR ---- */
-#controls-bar{
+/* ---- FLOATING CONTROLS (reliable): float the element-container containing #controls-anchor ---- */
+div[data-testid="element-container"]:has(#controls-anchor){
   position: fixed !important;
-  left: 420px !important;  /* sidebar 400 + 20 */
+  left: 420px !important;   /* sidebar 400 + 20 */
   right: 18px !important;
   bottom: 18px !important;
   z-index: 12000 !important;
@@ -119,15 +119,14 @@ canvas.mapboxgl-canvas{
   border-radius: 999px !important;
   border: 1px solid rgba(255,255,255,0.12) !important;
   backdrop-filter: blur(10px);
+  pointer-events: auto !important;
 }
-
-/* make sure controls are clickable */
-#controls-bar, #controls-bar *{
+div[data-testid="element-container"]:has(#controls-anchor) *{
   pointer-events: auto !important;
 }
 
 /* circular play button */
-#controls-bar .stButton button{
+div[data-testid="element-container"]:has(#controls-anchor) .stButton button{
   border-radius:999px !important;
   width:44px !important;
   height:44px !important;
@@ -175,12 +174,32 @@ RADAR_CMAP = ListedColormap(RADAR_COLORS)
 MRMS_S3_BASE = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/MultiSensor_QPE_01H_Pass2_00.00"
 RO_S3_BASE   = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00"
 
+# =============================
+# 4) HELPERS
+# =============================
 def csv_download_link(df: pd.DataFrame, filename: str, label: str):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     b64 = base64.b64encode(csv_bytes).decode()
     href = f"data:text/csv;base64,{b64}"
-    st.markdown(f'<div class="output-link">📄 <a download="{filename}" href="{href}">{label}</a></div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="output-link">📄 <a download="{filename}" href="{href}">{label}</a></div>',
+        unsafe_allow_html=True,
+    )
+
+def normalize_grid(da: xr.DataArray) -> xr.DataArray:
+    # keep only lat/lon coords; drop all cfgrib extras
+    keep = {"latitude", "longitude"}
+    drop = [c for c in da.coords if c not in keep]
+    da = da.drop_vars(drop, errors="ignore")
+
+    # squeeze any weird dims (step, surface, etc.)
+    for d in list(da.dims):
+        if d not in ("latitude", "longitude"):
+            da = da.squeeze(d, drop=True)
+
+    # consistent ordering
+    da = da.sortby("latitude", ascending=False).sortby("longitude")
+    return da
 
 def ny_is_dst(dt_local: datetime) -> bool:
     year = dt_local.year
@@ -205,6 +224,10 @@ def ceil_to_hour(dt: datetime) -> datetime:
     return dt0 if dt == dt0 else (dt0 + timedelta(hours=1))
 
 def load_precip(file_type: str, dt_local: datetime) -> xr.DataArray | None:
+    """
+    file_type: "RO" or "MRMS"
+    dt_local: naive NY local end time for the product timestamp
+    """
     dt_utc = local_to_utc(dt_local)
     ts = dt_utc.strftime("%Y%m%d-%H%M00")
     ymd = dt_utc.strftime("%Y%m%d")
@@ -234,6 +257,7 @@ def load_precip(file_type: str, dt_local: datetime) -> xr.DataArray | None:
             var = list(ds.data_vars)[0]
             da = ds[var].clip(min=0).load()
 
+        # lon to -180..180 + CRS
         da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
         da = da.rio.write_crs("EPSG:4326")
         return da
@@ -246,6 +270,7 @@ def load_precip(file_type: str, dt_local: datetime) -> xr.DataArray | None:
 def save_frame_png(da: xr.DataArray, dt_local: datetime) -> tuple[str, list]:
     data = da.values.astype("float32")
     data[data < 0.1] = np.nan
+
     img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_local.strftime('%Y%m%d_%H%M')}.png")
     plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
 
@@ -258,7 +283,7 @@ def save_frame_png(da: xr.DataArray, dt_local: datetime) -> tuple[str, list]:
     return img_path, bounds
 
 # =============================
-# 4) SIDEBAR UI
+# 5) SIDEBAR UI
 # =============================
 with st.sidebar:
     st.title("CNR GIS Portal")
@@ -292,15 +317,22 @@ with st.sidebar:
     if st.session_state.processing_msg:
         st.caption(st.session_state.processing_msg)
 
+    # =============================
+    # RUN PROCESSING
+    # =============================
     if st.button("Run Processing", use_container_width=True):
         try:
             if st.session_state.active_gdf is None:
                 st.session_state.processing_msg = "Upload a watershed boundary ZIP first."
                 st.rerun()
 
+            # user input local start/end (naive)
             start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
             end_dt   = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
 
+            # ALIGNMENT (your notebook logic):
+            # RO starts at start+15min
+            # MRMS starts at first full hour >= start+45min
             ro_start   = start_dt + timedelta(minutes=15)
             ro_end     = end_dt
             mrms_start = ceil_to_hour(start_dt + timedelta(minutes=45))
@@ -312,21 +344,21 @@ with st.sidebar:
             pb = st.progress(0.0)
             msg = st.empty()
 
-            # --- RO 15-min ---
+            # ---------- 1) Download RO ----------
             ro_list, ro_kept = [], []
-            total_steps = max(1, len(ro_times) + len(mrms_times) + 10)
+            total_steps = max(1, len(ro_times) + len(mrms_times) + 30)
             step_i = 0
 
-            for t in ro_times:
-                msg.info(f"RadarOnly 15-min → downloading {t:%Y-%m-%d %H:%M}")
+            for i, t in enumerate(ro_times):
+                msg.info(f"RadarOnly 15-min → downloading {i+1}/{len(ro_times)} • {t:%Y-%m-%d %H:%M}")
                 da = load_precip("RO", t)
                 step_i += 1; pb.progress(min(1.0, step_i/total_steps))
                 if da is None:
                     continue
 
                 sub = da.rio.write_crs("EPSG:4326", inplace=False)
-                clipped = sub.rio.clip(st.session_state.active_gdf.geometry, st.session_state.active_gdf.crs, drop=False)
-                clipped = clipped.fillna(0)
+                clipped = sub.rio.clip(st.session_state.active_gdf.geometry, st.session_state.active_gdf.crs, drop=False).fillna(0)
+                clipped = normalize_grid(clipped)
 
                 ro_list.append(clipped)
                 ro_kept.append(pd.Timestamp(t).to_pydatetime())
@@ -336,18 +368,18 @@ with st.sidebar:
 
             ro = xr.concat(ro_list, dim="time").assign_coords(time=ro_kept)
 
-            # --- MRMS hourly ---
+            # ---------- 2) Download MRMS ----------
             mrms_list, mrms_kept = [], []
-            for t in mrms_times:
-                msg.info(f"MRMS 1-hr → downloading {t:%Y-%m-%d %H:%M}")
+            for j, t in enumerate(mrms_times):
+                msg.info(f"MRMS 1-hr → downloading {j+1}/{len(mrms_times)} • {t:%Y-%m-%d %H:%M}")
                 da = load_precip("MRMS", t)
                 step_i += 1; pb.progress(min(1.0, step_i/total_steps))
                 if da is None:
                     continue
 
                 sub = da.rio.write_crs("EPSG:4326", inplace=False)
-                clipped = sub.rio.clip(st.session_state.active_gdf.geometry, st.session_state.active_gdf.crs, drop=False)
-                clipped = clipped.fillna(0)
+                clipped = sub.rio.clip(st.session_state.active_gdf.geometry, st.session_state.active_gdf.crs, drop=False).fillna(0)
+                clipped = normalize_grid(clipped)
 
                 mrms_list.append(clipped)
                 mrms_kept.append(pd.Timestamp(t).to_pydatetime())
@@ -357,28 +389,53 @@ with st.sidebar:
 
             mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
 
-            # --- Hourly RO sums aligned to MRMS ---
-            msg.info("Computing RO hourly sums aligned to MRMS…")
+            # ---------- 3) Force RO grid to match MRMS grid (prevents scaling crashes) ----------
+            msg.info("Aligning RO grid to MRMS grid…")
+            ro = ro.interp_like(mrms.isel(time=0))  # <-- THIS is where it belongs
+            step_i += 3; pb.progress(min(1.0, step_i/total_steps))
+
+            # ---------- 4) Build RO hourly sums aligned to MRMS (skip incomplete 4-frame hours) ----------
+            msg.info("Computing RO hourly sums aligned to MRMS (requires 4 frames/hour)…")
             ro_hourly = []
+            valid_mrms_times = []
+
             for T in mrms.time.values:
                 Tdt = pd.to_datetime(str(T)).to_pydatetime()
-                block = ro.sel(time=slice(Tdt - timedelta(minutes=45), Tdt)).sum(dim="time")
-                ro_hourly.append(block)
-            ro_hourly_da = xr.concat(ro_hourly, dim="time").assign_coords(time=mrms.time.values)
+                block = ro.sel(time=slice(Tdt - timedelta(minutes=45), Tdt))
 
-            # --- scaling rasters (MRMS / RO_hourly) ---
-            msg.info("Computing cell-wise scaling rasters (MRMS / RO-hourly)…")
+                if block.sizes.get("time", 0) != 4:
+                    continue  # missing frames => cannot scale this hour safely
+
+                ro_hourly.append(block.sum(dim="time"))
+                valid_mrms_times.append(Tdt)
+
+            if len(ro_hourly) == 0:
+                raise RuntimeError("No MRMS hours had a complete 4-frame RO block to scale.")
+
+            # keep only hours we can scale
+            mrms = mrms.sel(time=valid_mrms_times)
+            ro_hourly_da = xr.concat(ro_hourly, dim="time").assign_coords(time=valid_mrms_times)
+            step_i += 5; pb.progress(min(1.0, step_i/total_steps))
+
+            # ---------- 5) Cell-wise scaling rasters per hour: MRMS / RO_hourly ----------
+            msg.info("Computing hourly scaling rasters (MRMS / RO_hourly)…")
             ratio_list = []
+            eps = 0.01  # mm threshold to avoid divide-by-tiny
             for i in range(len(mrms.time)):
                 mrms_slice = mrms.isel(time=i)
                 ro_slice   = ro_hourly_da.isel(time=i)
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    ratio = mrms_slice / ro_slice
-                    ratio = ratio.where(np.isfinite(ratio), 0)
-                ratio_list.append(ratio)
-            scaling_da = xr.concat(ratio_list, dim="time").assign_coords(time=mrms.time.values)
 
-            # --- scale RO 15-min frames using the hour-end bin ---
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    ratio = xr.where(ro_slice > eps, mrms_slice / ro_slice, 0.0)
+                    ratio = ratio.where(np.isfinite(ratio), 0.0)
+                    ratio = ratio.clip(min=0.0, max=50.0)  # cap spikes
+
+                ratio_list.append(ratio)
+
+            scaling_da = xr.concat(ratio_list, dim="time").assign_coords(time=mrms.time.values)
+            step_i += 8; pb.progress(min(1.0, step_i/total_steps))
+
+            # ---------- 6) Scale each RO 15-min frame using the correct MRMS hour-end bin ----------
             msg.info("Applying hourly scaling to 15-min RO frames…")
             mrms_ends = [pd.to_datetime(str(x)).to_pydatetime() for x in mrms.time.values]
 
@@ -394,8 +451,8 @@ with st.sidebar:
 
                 hour_idx = mrms_ends.index(hour_end)
                 scale_raster = scaling_da.isel(time=hour_idx)
-                scaled = ro.sel(time=tdt) * scale_raster
 
+                scaled = ro.sel(time=tdt) * scale_raster
                 ro_scaled_list.append(scaled)
                 ro_scaled_times.append(tdt)
 
@@ -403,10 +460,12 @@ with st.sidebar:
                 raise RuntimeError("Scaling produced no valid frames. Check data availability/time alignment.")
 
             ro_scaled_da = xr.concat(ro_scaled_list, dim="time").assign_coords(time=ro_scaled_times)
+            step_i += 8; pb.progress(min(1.0, step_i/total_steps))
 
-            # --- Render frames for playback ---
-            msg.info("Rendering map frames…")
+            # ---------- 7) Render frames for playback ----------
+            msg.info("Rendering map frames for playback…")
             cache, stats = {}, []
+
             for i, tdt in enumerate(ro_scaled_da.time.values):
                 dt_local = pd.to_datetime(str(tdt)).to_pydatetime()
                 da = ro_scaled_da.sel(time=dt_local)
@@ -425,7 +484,7 @@ with st.sidebar:
             st.session_state.current_time_index = 0
             st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
 
-            msg.success(f"Complete: {len(cache)} frames • MRMS hours: {len(mrms.time)}")
+            msg.success(f"Complete: {len(cache)} frames • MRMS hours used: {len(mrms.time)}")
             st.session_state.processing_msg = f"Last run: {basin_name} • {len(cache)} frames (RO scaled to MRMS hourly)"
             st.rerun()
 
@@ -457,7 +516,7 @@ with st.sidebar:
             modal()
 
 # =============================
-# 5) ANIMATION LOOP
+# 6) ANIMATION LOOP
 # =============================
 if st.session_state.time_list and st.session_state.is_playing:
     st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
@@ -465,7 +524,7 @@ if st.session_state.time_list and st.session_state.is_playing:
     st.rerun()
 
 # =============================
-# 6) MAP RENDER
+# 7) MAP RENDER
 # =============================
 layers = []
 if st.session_state.time_list:
@@ -474,14 +533,16 @@ if st.session_state.time_list:
     layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
 
 if st.session_state.active_gdf is not None:
-    layers.append(pdk.Layer(
-        "GeoJsonLayer",
-        st.session_state.active_gdf.__geo_interface__,
-        stroked=True,
-        filled=False,
-        get_line_color=[255, 255, 255],
-        line_width_min_pixels=3
-    ))
+    layers.append(
+        pdk.Layer(
+            "GeoJsonLayer",
+            st.session_state.active_gdf.__geo_interface__,
+            stroked=True,
+            filled=False,
+            get_line_color=[255, 255, 255],
+            line_width_min_pixels=3,
+        )
+    )
 
 deck = pdk.Deck(
     layers=layers,
@@ -491,39 +552,38 @@ deck = pdk.Deck(
 st.pydeck_chart(deck, use_container_width=True, height=1000)
 
 # =============================
-# 7) CONTROLS (slider + play button ALWAYS visible)
+# 8) CONTROLS (slider + play button ALWAYS visible)
 # =============================
 if st.session_state.time_list:
-    # IMPORTANT: wrap controls in a div we can float reliably
-    st.markdown('<div id="controls-bar">', unsafe_allow_html=True)
+    with st.container():
+        # anchor must be inside the SAME container as the widgets
+        st.markdown('<span id="controls-anchor"></span>', unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns([1, 10, 2])
+        c1, c2, c3 = st.columns([1, 10, 2])
 
-    with c1:
-        if st.session_state.is_playing:
-            if st.button("⏸", key="pause_btn"):
+        with c1:
+            if st.session_state.is_playing:
+                if st.button("⏸", key="pause_btn"):
+                    st.session_state.is_playing = False
+                    st.rerun()
+            else:
+                if st.button("▶", key="play_btn"):
+                    st.session_state.is_playing = True
+                    st.rerun()
+
+        with c2:
+            idx = st.select_slider(
+                " ",
+                options=list(range(len(st.session_state.time_list))),
+                value=st.session_state.current_time_index,
+                format_func=lambda i: st.session_state.time_list[i],
+                label_visibility="collapsed",
+                key="timeline_slider",
+            )
+            if idx != st.session_state.current_time_index:
+                st.session_state.current_time_index = idx
                 st.session_state.is_playing = False
                 st.rerun()
-        else:
-            if st.button("▶", key="play_btn"):
-                st.session_state.is_playing = True
-                st.rerun()
 
-    with c2:
-        idx = st.select_slider(
-            " ",
-            options=list(range(len(st.session_state.time_list))),
-            value=st.session_state.current_time_index,
-            format_func=lambda i: st.session_state.time_list[i],
-            label_visibility="collapsed",
-            key="timeline_slider",
-        )
-        if idx != st.session_state.current_time_index:
-            st.session_state.current_time_index = idx
-            st.session_state.is_playing = False
-            st.rerun()
-
-    with c3:
-        st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
-
-    st.markdown("</div>", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
