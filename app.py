@@ -14,31 +14,45 @@ from datetime import datetime, timedelta
 import leafmap.foliumap as leafmap
 import plotly.express as px
 
-# --- 1. PAGE CONFIG & FULL-SCREEN CSS ---
+# --- 1. PAGE CONFIG & UI OVERRIDES ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🌧️")
 
-# This CSS removes the padding at the top and sides, and hides the scrollbar 
-# to make the map feel like a native desktop GIS application.
+# Custom CSS to fix the sidebar visibility, remove margins, and size the map
 st.markdown("""
     <style>
-        /* Remove margins from the main content area */
+        /* 1. Remove padding around the main app container */
         .block-container {
-            padding-top: 0rem !important;
+            padding-top: 0.5rem !important;
             padding-bottom: 0rem !important;
-            padding-left: 0rem !important;
-            padding-right: 0rem !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+            max-width: 100%;
         }
-        /* Hide the Streamlit header */
-        header {visibility: hidden;}
-        /* Make the map container fill the available height */
+        /* 2. Hide the top header bar but KEEP the sidebar toggle visible */
+        [data-testid="stHeader"] {
+            background-color: rgba(0,0,0,0);
+            height: 2.5rem;
+        }
+        /* 3. Style the Sidebar Toggle button so it doesn't get lost */
+        [data-testid="stSidebarCollapsedControl"] {
+            background-color: #262730;
+            color: white;
+            border-radius: 0 5px 5px 0;
+            top: 10px;
+        }
+        /* 4. Force the Map Iframe to be long (90% of viewport height) */
         iframe {
+            height: 75vh !important;
             width: 100% !important;
-            height: 85vh !important;
+        }
+        /* 5. Style the Time Slider container at the bottom */
+        .stSlider {
+            padding-bottom: 20px;
         }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SESSION STATE INITIALIZATION ---
+# --- 2. SESSION STATE ---
 if 'processed_df' not in st.session_state:
     st.session_state.processed_df = None
 if 'raster_cache' not in st.session_state:
@@ -46,7 +60,7 @@ if 'raster_cache' not in st.session_state:
 if 'time_list' not in st.session_state:
     st.session_state.time_list = []
 
-# --- 3. CORE PROCESSING FUNCTIONS ---
+# --- 3. HELPER FUNCTIONS ---
 def get_tz_offset(dt):
     edt_start = datetime(dt.year, 3, 8 + (6 - datetime(dt.year, 3, 1).weekday()) % 7)
     edt_end = datetime(dt.year, 11, 1 + (6 - datetime(dt.year, 11, 1).weekday()) % 7)
@@ -79,20 +93,20 @@ def download_s3_grib(file_type, dt_local):
         if os.path.exists(tmp_path): os.remove(tmp_path)
     return None
 
-# --- 4. SIDEBAR CONTROLS ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
-    st.title("🌧️ CNR Portal")
-    st.header("1. Time Window")
+    st.title("🛰️ CNR Rain Portal")
     
+    st.subheader("1. Datetime Range")
     c1, c2 = st.columns(2)
-    start_dt = datetime.combine(c1.date_input("Start", datetime.now() - timedelta(days=2)), 
-                                c2.time_input("T1", value=datetime.strptime("00:00", "%H:%M").time()))
+    start_dt = datetime.combine(c1.date_input("Start Date", datetime.now() - timedelta(days=2)), 
+                                c2.time_input("Start Time", value=datetime.strptime("00:00", "%H:%M").time()))
     
     c3, c4 = st.columns(2)
-    end_dt = datetime.combine(c3.date_input("End", datetime.now() - timedelta(days=1)), 
-                              c4.time_input("T2", value=datetime.strptime("23:45", "%H:%M").time()))
+    end_dt = datetime.combine(c3.date_input("End Date", datetime.now() - timedelta(days=1)), 
+                              c4.time_input("End Time", value=datetime.strptime("23:45", "%H:%M").time()))
 
-    st.header("2. Boundary")
+    st.subheader("2. Geometry")
     uploaded_zip = st.file_uploader("Upload ZIP Shapefile", type="zip")
     
     active_gdf = None
@@ -103,11 +117,11 @@ with st.sidebar:
             shps = list(Path(tmp_dir).rglob("*.shp"))
             if shps:
                 active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
-                st.success("Boundary Ready")
+                st.success("Geometry Loaded")
 
-    if st.button("🚀 Process Data", use_container_width=True):
+    if st.button("🚀 Process & Export", use_container_width=True):
         if active_gdf is not None:
-            with st.spinner("Extracting..."):
+            with st.spinner("Processing radar data..."):
                 time_range = pd.date_range(start_dt, end_dt, freq='15min')
                 temp_rasters, series_list = {}, []
                 
@@ -117,7 +131,8 @@ with st.sidebar:
                     if da is not None:
                         t_tif = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
                         da.rio.to_raster(t_tif)
-                        temp_rasters[ts.strftime("%Y-%m-%d %H:%M")] = t_tif
+                        time_str = ts.strftime("%Y-%m-%d %H:%M")
+                        temp_rasters[time_str] = t_tif
                         clipped = da.rio.clip(active_gdf.geometry, active_gdf.crs, all_touched=True)
                         series_list.append({"time": ts, "rain_in": clipped.mean().item() / 25.4})
                     prog.progress((i + 1) / len(time_range))
@@ -126,36 +141,44 @@ with st.sidebar:
                 st.session_state.raster_cache = temp_rasters
                 st.session_state.time_list = list(temp_rasters.keys())
         else:
-            st.warning("Upload a ZIP first")
+            st.warning("Please upload a ZIP shapefile.")
 
-# --- 5. MAIN PAGE: FULL-WIDTH MAP ---
+# --- 5. MAIN PAGE LAYOUT ---
 
-# Time Slider (only appears if data is ready)
-view_time = None
-if st.session_state.time_list:
-    view_time = st.select_slider("Select Radar Timestamp", options=st.session_state.time_list)
-
+# Define the map first
 m = leafmap.Map(center=[40.1, -74.5], zoom=8)
 
-if view_time and view_time in st.session_state.raster_cache:
-    m.add_raster(st.session_state.raster_cache[view_time], layer_name="Radar", colormap="terrain", opacity=0.6)
-
+# Add Shapefile
 if active_gdf is not None:
-    m.add_gdf(active_gdf, layer_name="User Boundary")
-    # Auto-zoom on first load
+    m.add_gdf(active_gdf, layer_name="Boundaries")
     if not st.session_state.time_list:
         m.zoom_to_gdf(active_gdf)
 
-# responsive=True + the CSS above makes this full-screen
-m.to_streamlit(responsive=True)
+# Display the Map (Takes up the majority of the screen length)
+map_placeholder = st.empty()
 
-# --- 6. RESULTS SECTION (BELOW MAP) ---
+# Add Time Slider BELOW the map
+view_time = None
+if st.session_state.time_list:
+    st.write("---") # Visual separator
+    view_time = st.select_slider("🕰️ View Radar at Time:", options=st.session_state.time_list)
+
+# Add Raster to map if slider is moved
+if view_time and view_time in st.session_state.raster_cache:
+    m.add_raster(st.session_state.raster_cache[view_time], layer_name="Radar", colormap="jet", opacity=0.5)
+
+# Render the Map in the placeholder
+with map_placeholder:
+    m.to_streamlit(responsive=True)
+
+# --- 6. RESULTS (STATISTICS) ---
 if st.session_state.processed_df is not None:
-    st.markdown("### 📊 Rain Analysis")
-    col_plot, col_stats = st.columns([3, 1])
-    with col_plot:
+    st.write("### 📊 Extracted Rainfall Statistics")
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
         fig = px.bar(st.session_state.processed_df.reset_index(), x="time", y="rain_in", template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
-    with col_stats:
-        st.download_button("📥 Export CSV", st.session_state.processed_df.to_csv().encode('utf-8'), "radar_rain.csv", use_container_width=True)
+    with col_b:
         st.dataframe(st.session_state.processed_df.describe(), use_container_width=True)
+        csv = st.session_state.processed_df.to_csv().encode('utf-8')
+        st.download_button("📥 Download Results", csv, "rainfall.csv", "text/csv", use_container_width=True)
