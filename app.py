@@ -181,6 +181,9 @@ section.main div[data-testid="stSlider"]{
 .output-link a:hover{
   text-decoration:underline !important;
 }
+section.main { z-index: 3000 !important; position: relative !important; }
+section.main div[data-testid="stSlider"] { z-index: 12000 !important; }
+section.main div[data-testid="stButton"] { z-index: 12000 !important; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -624,4 +627,5 @@ if st.session_state.time_list:
         f'<div id="time-float">{st.session_state.time_list[st.session_state.current_time_index]}</div>',
         unsafe_allow_html=True,
     )
+
 
