@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import os
 import zipfile
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
 import leafmap.foliumap as leafmap
@@ -20,8 +21,8 @@ st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰
 st.markdown("""
     <style>
         .block-container { padding: 1rem !important; }
-        iframe { height: 75vh !important; width: 100% !important; border-radius: 8px; }
-        [data-testid="stSidebarCollapsedControl"] { display: flex !important; }
+        iframe { height: 70vh !important; width: 100% !important; border-radius: 8px; }
+        .stSlider { padding-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -51,9 +52,7 @@ def download_mrms(dt_utc):
             with gzip.GzipFile(fileobj=r.raw) as gz, open(tmp, "wb") as f:
                 shutil.copyfileobj(gz, f)
             with xr.open_dataset(tmp, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
-                var_name = list(ds.data_vars)[0]
-                da = ds[var_name].load()
-                # Correct projection and coordinates
+                da = ds[list(ds.data_vars)[0]].load()
                 da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
                 da = da.rio.write_crs("EPSG:4326")
                 return da
@@ -92,7 +91,7 @@ with st.sidebar:
 
     if st.button("🚀 Process & Export", use_container_width=True):
         if active_gdf is not None:
-            with st.spinner("Crunching Radar Layers..."):
+            with st.spinner("Processing..."):
                 s_dt = datetime.combine(start_d, datetime.strptime(start_t, "%H:%M").time())
                 e_dt = datetime.combine(end_d, datetime.strptime(end_t, "%H:%M").time())
                 tr = pd.date_range(s_dt, e_dt, freq='1H')
@@ -103,25 +102,21 @@ with st.sidebar:
                     ts_utc = ts if tz_mode == "UTC" else ts + timedelta(hours=get_tz_offset(ts))
                     da = download_mrms(ts_utc)
                     if da is not None:
-                        # Save GeoTIFF for Map (CONUS)
-                        # We mask values <= 0 for map display only so it's transparent where dry
+                        # Map Layer
                         map_da = da.where(da > 0.1, np.nan)
                         tf = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
                         map_da.rio.to_raster(tf)
                         rc[ts.strftime("%Y-%m-%d %H:%M")] = tf
                         
-                        # Stats Calculation (Filled with 0 if empty)
+                        # CSV Stats
                         clipped = da.rio.clip(active_gdf.geometry, active_gdf.crs, all_touched=True)
                         mean_val = float(clipped.mean()) if not clipped.isnull().all() else 0.0
-                        # Check for 0 specifically
-                        if np.isnan(mean_val) or mean_val < 0: mean_val = 0.0
-                        sl.append({"time": ts, "rain_in": mean_val/25.4})
+                        sl.append({"time": ts, "rain_in": max(0, mean_val/25.4)})
                     else:
-                        # If file is missing, still add a 0 entry to keep time steps continuous
                         sl.append({"time": ts, "rain_in": 0.0})
                     pb.progress((i+1)/len(tr))
                 
-                st.session_state.processed_df = pd.DataFrame(sl).set_index("time")
+                st.session_state.processed_df = pd.DataFrame(sl).fillna(0.0).set_index("time")
                 st.session_state.raster_cache = rc
                 st.session_state.time_list = list(rc.keys())
         else: st.warning("Upload ZIP first")
@@ -136,16 +131,41 @@ m = leafmap.Map(center=[40.1, -74.5], zoom=7)
 if active_gdf is not None:
     m.add_gdf(active_gdf, layer_name="Site Boundary")
 
+# The Playback logic using a Streamlit slider at the bottom
 if st.session_state.time_list:
-    # This adds the playback bar with slider and play button at the bottom
-    m.add_time_slider(
-        st.session_state.raster_cache,
-        labels=st.session_state.time_list,
-        time_interval=500,
-        position="bottomright"
+    # 1. Map container
+    map_placeholder = st.empty()
+    
+    # 2. Controls container (Bottom)
+    col_play, col_slider = st.columns([1, 10])
+    play = col_play.button("▶️ Play")
+    
+    # Define the slider
+    step_index = col_slider.select_slider(
+        "Time Selection", 
+        options=range(len(st.session_state.time_list)),
+        format_func=lambda x: st.session_state.time_list[x],
+        label_visibility="collapsed"
     )
 
-m.to_streamlit()
+    # If "Play" is clicked, we loop through the slider
+    if play:
+        for i in range(len(st.session_state.time_list)):
+            selected_t = st.session_state.time_list[i]
+            # Create a new map for each frame
+            frame_map = leafmap.Map(center=[40.1, -74.5], zoom=7)
+            if active_gdf is not None: frame_map.add_gdf(active_gdf, layer_name="Boundary")
+            frame_map.add_raster(st.session_state.raster_cache[selected_t], colormap="jet", opacity=0.6, vmin=0.1, vmax=2.0)
+            map_placeholder.to_streamlit()
+            time.sleep(0.3)
+    else:
+        # Static display based on slider
+        selected_t = st.session_state.time_list[step_index]
+        m.add_raster(st.session_state.raster_cache[selected_t], colormap="jet", opacity=0.6, vmin=0.1, vmax=2.0)
+        with map_placeholder:
+            m.to_streamlit()
+else:
+    m.to_streamlit()
 
 # --- 6. CHART ---
 if st.session_state.processed_df is not None:
