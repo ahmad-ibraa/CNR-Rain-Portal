@@ -9,3 +9,4 @@ leafmap
 plotly
 eccodes
 rasterio
+localtileserver
