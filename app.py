@@ -140,6 +140,29 @@ canvas.mapboxgl-canvas{
   border-radius:10px !important;
   height:44px !important;
   font-weight:650 !important;
+/* The critical fix: Allow clicks to pass through to the slider */
+[data-testid="stAppViewContainer"] {
+    pointer-events: none !important;
+}
+[data-testid="stSidebar"], .control-bar, .stButton, .stSlider, .stSelectSlider {
+    pointer-events: auto !important;
+}
+
+/* Ensure the control bar is visible and interactive */
+.control-bar {
+    position: fixed !important;
+    left: 420px !important;
+    right: 30px !important;
+    bottom: 30px !important;
+    height: 70px !important; /* Fixed height to prevent layout shifts */
+    z-index: 999999 !important;
+    background: rgba(25,25,25,0.95) !important;
+    padding: 5px 20px !important;
+    border-radius: 15px !important;
+    border: 1px solid rgba(255,255,255,0.2) !important;
+    backdrop-filter: blur(15px);
+    display: flex;
+    align-items: center;
 }
 </style>
 """,
@@ -423,69 +446,68 @@ st.pydeck_chart(pdk.Deck(
 ), use_container_width=True, height=1000)
 
 # =============================
-# 7) FLOATING CONTROLS (The Slider)
+# 7) FLOATING CONTROLS (REWRITTEN)
 # =============================
 if st.session_state.time_list:
-    # Use a container to wrap the markdown and columns for better z-index handling
     st.markdown('<div class="control-bar">', unsafe_allow_html=True)
     
-    # Increase the ratio for c2 to give the slider more horizontal room
-    c1, c2, c3 = st.columns([1, 12, 3]) 
+    # Using a flatter layout for better responsiveness
+    col_play, col_slider, col_txt = st.columns([1, 10, 3])
     
-    with c1:
+    with col_play:
         if st.button("⏸" if st.session_state.is_playing else "▶", key="play_btn"):
             st.session_state.is_playing = not st.session_state.is_playing
             st.rerun()
-    with c2:
+            
+    with col_slider:
         idx = st.select_slider(
-            "Timeline", 
-            options=list(range(len(st.session_state.time_list))), 
-            value=int(st.session_state.current_time_index), 
-            format_func=lambda i: st.session_state.time_list[i], 
-            label_visibility="collapsed", 
+            "Timeline",
+            options=list(range(len(st.session_state.time_list))),
+            value=int(st.session_state.current_time_index),
+            format_func=lambda i: st.session_state.time_list[i],
+            label_visibility="collapsed",
             key="timeline_slider"
         )
         if idx != st.session_state.current_time_index:
             st.session_state.current_time_index = idx
             st.session_state.is_playing = False
             st.rerun()
-    with c3: 
-        # Added a specific class or style to ensure text is visible on the dark bar
-        st.markdown(f'<p style="color:white; margin:0; line-height:44px; font-size:14px; white-space:nowrap;"><b>{st.session_state.time_list[st.session_state.current_time_index]}</b></p>', unsafe_allow_html=True)
+            
+    with col_txt:
+        # Clean timestamp display
+        ts_label = st.session_state.time_list[st.session_state.current_time_index]
+        st.markdown(f'<p style="color:#01a0fe; margin:0; font-family:monospace; font-size:15px; font-weight:bold;">{ts_label}</p>', unsafe_allow_html=True)
+        
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================
-# 8) OUTPUTS (Bar Chart & Downloads)
+# 8) OUTPUTS (STYLIZED BAR CHART)
 # =============================
 with st.sidebar:
     if st.session_state.basin_vault:
         st.divider()
-        st.subheader("Data Analysis")
+        st.subheader("Rainfall Analysis")
         
-        current_basin_df = st.session_state.basin_vault[basin_name]
+        df = st.session_state.basin_vault[basin_name]
         
-        # --- SHOW BAR PLOT ---
-        fig, ax = plt.subplots(figsize=(5, 3))
-        # Use ax.bar instead of ax.plot
-        ax.bar(
-            current_basin_df["time"], 
-            current_basin_df["rain_in"], 
-            color="#01a0fe", 
-            width=0.008  # Adjust width based on time frequency (0.01 is ~15 mins)
-        )
+        fig, ax = plt.subplots(figsize=(5, 3.5))
+        # Use a calculated width for bars (approx 10 mins in day-units)
+        ax.bar(df["time"], df["rain_in"], color="#01a0fe", width=0.006, edgecolor="white", linewidth=0.3)
         
-        ax.set_ylabel("Avg Rain (in)", color="white")
-        ax.set_title(f"Rainfall: {basin_name}", color="white")
+        # Highlight current time in the bar chart
+        curr_time = pd.to_datetime(st.session_state.time_list[st.session_state.current_time_index])
+        ax.axvline(curr_time, color="#ff0101", linestyle="--", alpha=0.8, lw=1)
         
-        # Style the plot for Dark Mode
-        ax.set_facecolor('#111')
-        fig.patch.set_facecolor('#111')
-        ax.tick_params(colors='white')
+        ax.set_ylabel("Inches", color="gray")
+        ax.set_facecolor('#0e1117')
+        fig.patch.set_facecolor('#0e1117')
+        ax.tick_params(colors='gray', labelsize=8)
+        
         for spine in ax.spines.values():
-            spine.set_color('white')
+            spine.set_visible(False)
             
         plt.xticks(rotation=45)
         st.pyplot(fig)
         
-        st.write("### Exports")
-        csv_download_link(current_basin_df, f"{basin_name}_rainfall.csv", f"Download {basin_name} CSV")
+        csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
