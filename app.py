@@ -14,23 +14,30 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# --- 1. PAGE CONFIG & RESPONSIVE CSS ---
+# --- 1. PAGE CONFIG & AGGRESSIVE FULL-HEIGHT CSS ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
 
-# Force the map to fill the vertical space of the browser
 st.markdown("""
     <style>
-        /* Remove extra padding around the app */
-        .block-container { padding: 1rem !important; }
-        
-        /* Force Pydeck to occupy 75% of the screen height */
-        [data-testid="stPydeckChart"] {
-            height: 75vh !important;
-            min-height: 500px;
+        /* 1. Remove all padding from the main app container */
+        .block-container { 
+            padding-top: 1rem !important; 
+            padding-bottom: 0rem !important; 
+            padding-left: 2rem !important; 
+            padding-right: 2rem !important; 
         }
         
-        /* Make the sidebar a bit cleaner */
-        section[data-testid="stSidebar"] { width: 350px !important; }
+        /* 2. Force the Pydeck container to be 85% of the screen height */
+        /* We target both the test-id and the internal iframe */
+        [data-testid="stPydeckChart"], .stPydeckChart, iframe {
+            height: 85vh !important;
+            min-height: 700px !important;
+        }
+
+        /* 3. Ensure the map takes up the full width of its container */
+        .element-container, .stPydeckChart {
+            width: 100% !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -57,7 +64,6 @@ def get_mrms_points(dt_utc):
             
         with xr.open_dataset(tmp_path, engine="cfgrib") as ds:
             da = ds[list(ds.data_vars)[0]].load()
-            # Projection: 0-360 to -180-180
             da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
             da = da.rio.write_crs("EPSG:4326")
 
@@ -66,7 +72,7 @@ def get_mrms_points(dt_utc):
                 clipped = da.rio.clip(st.session_state.active_gdf.geometry, "EPSG:4326")
                 site_mean = float(clipped.mean()) if not clipped.isnull().all() else 0.0
 
-            # Local focus subset
+            # Subsetting for Northeast US
             subset = da.sel(latitude=slice(43, 38), longitude=slice(-77, -71))
             df = subset.to_dataframe(name='val').reset_index()
             df = df[df['val'] > 0.1] 
@@ -117,6 +123,7 @@ with st.sidebar:
         else: st.warning("Upload Shapefile First")
 
 # --- 5. MAIN CONTENT (MAP) ---
+st.subheader("Radar GIS Viewer")
 map_spot = st.empty()
 
 def render_deck(idx=0):
@@ -138,21 +145,20 @@ def render_deck(idx=0):
                                     color_range=[[0,255,255,100],[0,0,255,180],[255,0,0,230]]))
 
     with map_spot:
-        # Note: height=None here allows the CSS (vh) to control the display
         st.pydeck_chart(pdk.Deck(
             layers=layers,
             initial_view_state=pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom),
             map_style="light" 
-        ))
+        ), use_container_width=True)
 
-# Controls
+# Animation Controls
 if st.session_state.time_list:
     cp, cs = st.columns([1, 5])
-    if cp.button("⏹️ Stop" if st.session_state.playing else "▶️ Play"):
+    if cp.button("⏹️ Stop" if st.session_state.playing else "▶️ Play Animation"):
         st.session_state.playing = not st.session_state.playing
         st.rerun()
     
-    st.session_state.current_idx = cs.select_slider("Time Selection", 
+    st.session_state.current_idx = cs.select_slider("Timeline", 
                                                    options=range(len(st.session_state.time_list)), 
                                                    format_func=lambda x: st.session_state.time_list[x])
     
