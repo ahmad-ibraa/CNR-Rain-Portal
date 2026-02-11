@@ -26,7 +26,8 @@ st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar
 # -----------------------------
 # 2) CSS (fullscreen map + locked sidebar + floating controls)
 # -----------------------------
-st.markdown("""
+st.markdown(
+    """
 <style>
 /* ---- GLOBAL: no scrollbars ---- */
 html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"]{
@@ -74,10 +75,10 @@ button[title="Collapse sidebar"]{
   overflow:auto !important;
   padding:10px 12px !important;
 }
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ gap:0.30rem !important; }
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ gap:0.28rem !important; }
 [data-testid="stSidebar"] .block-container{ padding:0 !important; margin:0 !important; }
 
-/* ---- DECK.GL fullscreen (this is what fixed your offsets) ---- */
+/* ---- DECK.GL fullscreen (kills offsets) ---- */
 #deckgl-wrapper{
   position:fixed !important;
   inset:0 !important;
@@ -106,29 +107,30 @@ canvas.mapboxgl-canvas{
   height:100% !important;
 }
 
-/* ---- FLOATING CONTROLS ---- */
-/* Float the Streamlit element container that contains our anchor */
-div[data-testid="element-container"]:has(#controls-anchor){
+/* ---- FLOAT MAIN CONTROLS RELIABLY (no :has anchor) ---- */
+/* Float ONLY main-area slider */
+section.main div[data-testid="stSlider"]{
   position:fixed !important;
-  left:420px !important;
-  right:18px !important;
+  left:480px !important;     /* sidebar 400 + spacing */
+  right:140px !important;    /* room for time label */
   bottom:18px !important;
-
   z-index:9999 !important;
+
   background:rgba(15,15,15,0.92) !important;
   padding:12px 18px !important;
   border-radius:999px !important;
-  border:1px solid rgba(255,255,255,0.12);
+  border:1px solid rgba(255,255,255,0.12) !important;
   backdrop-filter: blur(10px);
+}
 
-  display:block !important;
-  pointer-events:auto !important;
+/* Float ONLY main-area play/pause button */
+section.main div[data-testid="stButton"]{
+  position:fixed !important;
+  left:420px !important;     /* sidebar 400 + 20 */
+  bottom:18px !important;
+  z-index:10000 !important;
 }
-div[data-testid="element-container"]:has(#controls-anchor) *{
-  visibility:visible !important;
-  pointer-events:auto !important;
-}
-div[data-testid="element-container"]:has(#controls-anchor) .stButton button{
+section.main div[data-testid="stButton"] button{
   border-radius:999px !important;
   width:44px !important;
   height:44px !important;
@@ -136,7 +138,23 @@ div[data-testid="element-container"]:has(#controls-anchor) .stButton button{
   font-size:18px !important;
 }
 
-/* nicer primary buttons in sidebar */
+/* Floating time label */
+#time-float{
+  position:fixed !important;
+  right:22px !important;
+  bottom:28px !important;
+  z-index:10001 !important;
+
+  color:#fff !important;
+  font-weight:600 !important;
+  background:rgba(15,15,15,0.65) !important;
+  padding:6px 10px !important;
+  border-radius:10px !important;
+  border:1px solid rgba(255,255,255,0.10) !important;
+  backdrop-filter: blur(10px);
+}
+
+/* sidebar buttons a bit more professional */
 [data-testid="stSidebar"] .stButton button{
   width:100% !important;
   border-radius:10px !important;
@@ -153,7 +171,9 @@ div[data-testid="element-container"]:has(#controls-anchor) .stButton button{
   text-decoration:underline !important;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # -----------------------------
 # 3) STATE
@@ -367,36 +387,37 @@ deck = pdk.Deck(
 st.pydeck_chart(deck, use_container_width=True, height=1000)
 
 # -----------------------------
-# 8) CONTROLS (floating via anchor)
+# 8) CONTROLS (always visible)
 # -----------------------------
 if st.session_state.time_list:
-    with st.container():
-        st.markdown('<div id="controls-anchor"></div>', unsafe_allow_html=True)
+    # Play/pause button (this is the ONLY main button)
+    if st.session_state.is_playing:
+        if st.button("⏸", key="pause_btn"):
+            st.session_state.is_playing = False
+            st.rerun()
+    else:
+        if st.button("▶", key="play_btn"):
+            st.session_state.is_playing = True
+            st.rerun()
 
-        col1, col2, col3 = st.columns([1, 10, 2])
+    # Timeline slider (main-area slider will be floated by CSS)
+    selected_index = st.select_slider(
+        " ",
+        options=range(len(st.session_state.time_list)),
+        value=st.session_state.current_time_index,
+        format_func=lambda x: st.session_state.time_list[x],
+        label_visibility="collapsed",
+        key="timeline_slider",
+    )
+    if selected_index != st.session_state.current_time_index:
+        st.session_state.current_time_index = selected_index
+        st.session_state.is_playing = False
+        st.rerun()
 
-        with col1:
-            if st.session_state.is_playing:
-                if st.button("⏸", key="pause_btn"):
-                    st.session_state.is_playing = False
-                    st.rerun()
-            else:
-                if st.button("▶", key="play_btn"):
-                    st.session_state.is_playing = True
-                    st.rerun()
+    # Floating time label (we control it with our own div)
+    st.markdown(
+        f'<div id="time-float">{st.session_state.time_list[st.session_state.current_time_index]}</div>',
+        unsafe_allow_html=True
+    )
 
-        with col2:
-            selected_index = st.select_slider(
-                "",
-                options=range(len(st.session_state.time_list)),
-                value=st.session_state.current_time_index,
-                format_func=lambda x: st.session_state.time_list[x],
-                label_visibility="collapsed",
-            )
-            if selected_index != st.session_state.current_time_index:
-                st.session_state.current_time_index = selected_index
-                st.session_state.is_playing = False
-                st.rerun()
 
-        with col3:
-            st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
