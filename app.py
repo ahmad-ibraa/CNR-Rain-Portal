@@ -164,6 +164,66 @@ st.markdown("""
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* ---------- Floating bar: center contents ---------- */
+.floating-controls{
+  height: 70px !important;                 /* give it a stable height */
+  display: flex !important;
+  align-items: center !important;          /* vertical centering */
+}
+
+/* Streamlit columns row inside the floating bar */
+.floating-controls [data-testid="stHorizontalBlock"]{
+  align-items: center !important;          /* vertical centering */
+  gap: 14px !important;
+}
+
+/* Reduce extra vertical padding Streamlit adds around widgets */
+.floating-controls [data-testid="stSlider"]{
+  margin-top: -6px !important;
+  margin-bottom: -6px !important;
+}
+
+/* ---------- Slider restyle (BaseWeb slider) ---------- */
+.floating-controls [data-baseweb="slider"]{
+  padding: 0 10px !important;
+}
+
+/* Track (unfilled + filled) - BaseWeb usually uses 2 bars */
+.floating-controls [data-baseweb="slider"] > div{
+  align-items: center !important;
+}
+
+/* These selectors are intentionally broad because Streamlit hashes classnames */
+.floating-controls [data-baseweb="slider"] div[role="progressbar"]{
+  height: 8px !important;
+  border-radius: 999px !important;
+  background: rgba(255,255,255,0.14) !important;  /* unfilled track */
+}
+
+/* Filled portion sits inside the progressbar in many Streamlit builds */
+.floating-controls [data-baseweb="slider"] div[role="progressbar"] > div{
+  height: 8px !important;
+  border-radius: 999px !important;
+  background: rgba(1,160,254,0.95) !important;    /* filled track */
+  box-shadow: 0 0 10px rgba(1,160,254,0.25);
+}
+
+/* Thumb */
+.floating-controls [data-baseweb="slider"] div[role="slider"]{
+  width: 18px !important;
+  height: 18px !important;
+  border-radius: 999px !important;
+  background: #01a0fe !important;
+  border: 2px solid rgba(255,255,255,0.85) !important;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.45), 0 0 14px rgba(1,160,254,0.25) !important;
+}
+
+/* Optional: make the timestamp look more “HUD-like” */
+.floating-controls .timestamp{
+  opacity: 0.95;
+  letter-spacing: 0.2px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -499,7 +559,7 @@ if st.session_state.time_list:
     with st.container():
         st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
 
-        col_slider, col_txt = st.columns([12, 3])
+        col_slider, col_txt = st.columns([14, 4])
 
         with col_slider:
             chosen = st.select_slider(
@@ -567,6 +627,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
