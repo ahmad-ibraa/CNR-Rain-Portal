@@ -15,43 +15,39 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
-# --- 1. PAGE CONFIG & AGGRESSIVE FULL-HEIGHT CSS ---
+# --- 1. PAGE CONFIG & UI LOCK ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
 
 st.markdown("""
     <style>
-        /* 1. Kill all default padding and headers */
         .block-container { padding: 0rem 1rem 0rem 1rem !important; }
-        header { display: none !important; }
-        footer { display: none !important; }
-        #MainMenu { visibility: hidden; }
-
-        /* 2. Force the Pydeck container to be massive */
+        header, footer { display: none !important; }
+        
+        /* Maximize Map Height */
         div[data-testid="stPydeckChart"], iframe {
-            height: 82vh !important;
+            height: 88vh !important;
             width: 100% !important;
         }
-
-        /* 3. Tighten the widget area below the map */
-        .stSlider { margin-top: -20px !important; }
+        .stSlider { margin-top: -15px !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. NEXRAD COLORS ---
+# --- 2. COLORS & PERSISTENT STATE ---
 RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
-# --- 3. SESSION STATE ---
+# Persistent storage for data and VIEWPORT
 if 'processed_df' not in st.session_state: st.session_state.processed_df = None
 if 'radar_cache' not in st.session_state: st.session_state.radar_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
 if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
-if 'view_state' not in st.session_state: 
-    st.session_state.view_state = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
 
-# --- 4. DATA ENGINE (Now supports 15-min intervals) ---
+# This is the key to stopping the "Re-Zoom"
+if 'map_view' not in st.session_state: 
+    st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9, pitch=0, bearing=0)
+
+# --- 3. DATA ENGINE ---
 def get_radar_image(dt_utc):
-    # MRMS filenames use the specific minute (00, 15, 30, 45)
     ts_str = dt_utc.strftime("%Y%m%d-%H%M00") 
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{dt_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
     
@@ -65,7 +61,6 @@ def get_radar_image(dt_utc):
         with xr.open_dataset(tmp_grib, engine="cfgrib") as ds:
             da = ds[list(ds.data_vars)[0]].load()
             da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
-            # Focus area crop
             subset = da.sel(latitude=slice(42.5, 38.5), longitude=slice(-76.5, -72.5))
             
             site_mean = 0.0
@@ -86,13 +81,12 @@ def get_radar_image(dt_utc):
     finally:
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
-# --- 5. SIDEBAR ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("🛰️ CNR GIS Portal")
     tz_mode = st.radio("Timezone", ["Local (EST/EDT)", "UTC"])
-    yesterday = datetime.now() - timedelta(days=1)
-    s_date = st.date_input("Start Date", value=yesterday.date())
-    e_date = st.date_input("End Date", value=yesterday.date())
+    s_date = st.date_input("Start Date", value=datetime.now().date())
+    e_date = st.date_input("End Date", value=datetime.now().date())
     
     hours = [f"{h:02d}:00" for h in range(24)]
     c1, c2 = st.columns(2)
@@ -107,13 +101,17 @@ with st.sidebar:
             if shps:
                 st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
                 b = st.session_state.active_gdf.total_bounds
-                st.session_state.view_state = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=11)
+                # ONLY UPDATE VIEWPORT ONCE DURING UPLOAD
+                st.session_state.map_view = pdk.ViewState(
+                    latitude=(b[1]+b[3])/2, 
+                    longitude=(b[0]+b[2])/2, 
+                    zoom=11
+                )
 
-    if st.button("🚀 Process 15-Min Radar", use_container_width=True):
+    if st.button("🚀 Process 15-Min Radar"):
         if st.session_state.active_gdf is not None:
             s_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
             e_dt = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
-            # INCREASED RESOLUTION: Now pulling every 15 minutes
             tr = pd.date_range(s_dt, e_dt, freq='15min')
             
             cache, stats = {}, []
@@ -131,38 +129,43 @@ with st.sidebar:
             st.session_state.processed_df = pd.DataFrame(stats)
         else: st.error("Upload ZIP first.")
 
-# --- 6. MAIN CONTENT ---
-# We put the Map at the top and widgets at the bottom to maximize space
+    if st.session_state.processed_df is not None:
+        if st.button("📊 Show Seamless Plot", type="primary"):
+            import plotly.express as px
+            @st.dialog("Rainfall Statistics")
+            def modal():
+                fig = px.bar(st.session_state.processed_df, x='time', y='rain_in', template="plotly_dark")
+                fig.update_layout(bargap=0, margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+            modal()
+
+# --- 5. MAIN MAP (SEAMLESS UPDATE) ---
+# We use st.pydeck_chart with a constant session-based view state
 if st.session_state.time_list:
-    current_data = st.session_state.radar_cache[st.session_state.time_list[0]] # Placeholder
-    
-    # Render map area
-    map_container = st.empty()
-    
-    # Render controls below the map
-    t_idx = st.select_slider("Timeline (15-Min Intervals)", options=range(len(st.session_state.time_list)),
+    t_idx = st.select_slider("Timeline", options=range(len(st.session_state.time_list)),
                              format_func=lambda x: st.session_state.time_list[x])
     
     current_data = st.session_state.radar_cache[st.session_state.time_list[t_idx]]
+    
     layers = [
         pdk.Layer("BitmapLayer", image=current_data["path"], bounds=current_data["bounds"], opacity=0.7),
         pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                   stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3)
     ]
     
-    with map_container:
-        st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=st.session_state.view_state, map_style="dark"))
+    # Passing st.session_state.map_view here ensures no re-zoom on interaction
+    st.pydeck_chart(pdk.Deck(
+        layers=layers, 
+        initial_view_state=st.session_state.map_view, 
+        map_style="dark"
+    ))
 else:
-    # Initial state
     layers = []
     if st.session_state.active_gdf is not None:
         layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                                 stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
-    st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=st.session_state.view_state, map_style="dark"))
-
-# --- 7. CHART ---
-if st.session_state.processed_df is not None and not st.session_state.processed_df.empty:
-    import plotly.express as px
-    st.plotly_chart(px.bar(st.session_state.processed_df, x='time', y='rain_in', 
-                           template="plotly_dark", color_discrete_sequence=['#00CCFF']), 
-                           use_container_width=True)
+    st.pydeck_chart(pdk.Deck(
+        layers=layers, 
+        initial_view_state=st.session_state.map_view, 
+        map_style="dark"
+    ))
