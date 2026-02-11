@@ -18,82 +18,9 @@ import rioxarray
 import time
 
 # -----------------------------
-# 1. PAGE CONFIG & FULLSCREEN LAYOUT
+# 1. PAGE CONFIG
 # -----------------------------
 st.set_page_config(layout="wide", page_title="CNR Radar Portal")
-
-st.markdown("""
-<style>
-    /* Remove all default padding and make app fullscreen */
-    .main .block-container {
-        padding: 0 !important;
-        max-width: 100% !important;
-        height: 100vh !important;
-        overflow: hidden;
-    }
-    
-    /* Make the entire app container fullscreen */
-    .main {
-        height: 100vh !important;
-        overflow: hidden;
-    }
-
-    /* Force the Map to be fullscreen */
-    .stPydeckChart {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        bottom: 0 !important;
-        height: 100vh !important;
-        width: 100vw !important;
-        z-index: 0 !important;
-    }
-
-    /* Floating Sidebar overlay */
-    [data-testid="stSidebar"] {
-        position: fixed !important;
-        z-index: 999 !important;
-        min-width: 400px !important;
-        background-color: rgba(17, 17, 17, 0.95) !important;
-        backdrop-filter: blur(10px);
-        height: 100vh !important;
-    }
-
-    /* Floating Controls at Bottom */
-    .controls-container {
-        position: fixed !important;
-        bottom: 20px !important;
-        left: 420px !important;
-        right: 40px !important;
-        z-index: 998;
-        background: rgba(20, 20, 20, 0.95) !important;
-        padding: 15px 30px !important;
-        border-radius: 50px !important;
-        border: 1px solid #333;
-        backdrop-filter: blur(10px);
-        display: flex;
-        align-items: center;
-        gap: 20px;
-    }
-
-    /* Style the play/pause buttons */
-    .stButton button {
-        border-radius: 50% !important;
-        width: 50px !important;
-        height: 50px !important;
-        padding: 0 !important;
-        font-size: 20px !important;
-    }
-
-    header, footer { visibility: hidden !important; }
-    
-    /* Hide scrollbars */
-    ::-webkit-scrollbar {
-        display: none;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # -----------------------------
 # 2. STATE MANAGEMENT
@@ -150,7 +77,65 @@ def get_radar_image(dt_utc):
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
 # -----------------------------
-# 4. SIDEBAR
+# 4. CUSTOM CSS
+# -----------------------------
+st.markdown("""
+<style>
+    /* Make main container fullscreen */
+    .main .block-container {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        max-width: 100% !important;
+    }
+
+    /* Make map fullscreen */
+    .stPydeckChart {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: 0 !important;
+    }
+
+    /* Sidebar overlay */
+    [data-testid="stSidebar"] {
+        z-index: 999 !important;
+        background-color: rgba(17, 17, 17, 0.95) !important;
+        backdrop-filter: blur(10px);
+    }
+
+    /* Style buttons as circular */
+    .stButton button {
+        border-radius: 50% !important;
+        width: 50px !important;
+        height: 50px !important;
+        padding: 0 !important;
+        font-size: 24px !important;
+        line-height: 1 !important;
+    }
+
+    /* Hide header and footer */
+    header, footer {visibility: hidden;}
+    
+    /* Position controls at bottom */
+    div[data-testid="stHorizontalBlock"] {
+        position: fixed !important;
+        bottom: 20px !important;
+        left: 420px !important;
+        right: 40px !important;
+        z-index: 998 !important;
+        background: rgba(20, 20, 20, 0.95) !important;
+        padding: 15px 30px !important;
+        border-radius: 50px !important;
+        border: 1px solid #333 !important;
+        backdrop-filter: blur(10px) !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------
+# 5. SIDEBAR
 # -----------------------------
 with st.sidebar:
     st.title("CNR GIS Portal")
@@ -215,65 +200,70 @@ with st.sidebar:
         st.download_button(f"DOWNLOAD {target_basin}.CSV", data=csv_data, file_name=f"{target_basin}.csv", use_container_width=True)
 
 # -----------------------------
-# 5. MAP RENDER WITH ANIMATION CONTROLS
+# 6. BUILD MAP LAYERS
 # -----------------------------
 layers = []
-current_time_str = None
 
+# Handle animation
+if st.session_state.time_list and st.session_state.is_playing:
+    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
+    time.sleep(0.5)
+    st.rerun()
+
+# Add radar layer if available
 if st.session_state.time_list:
-    # Create placeholder for controls
-    controls_placeholder = st.container()
-    
-    # Animation logic
-    if st.session_state.is_playing:
-        st.session_state.current_time_index = (st.session_state.current_time_index + 1) % len(st.session_state.time_list)
-        time.sleep(0.5)  # Animation speed
-        st.rerun()
-    
     current_time_str = st.session_state.time_list[st.session_state.current_time_index]
     curr = st.session_state.radar_cache[current_time_str]
     layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.7))
-    
-    # Render controls at bottom
-    with controls_placeholder:
-        st.markdown('<div class="controls-container">', unsafe_allow_html=True)
-        col1, col2, col3 = st.columns([1, 8, 1])
-        
-        with col1:
-            if st.session_state.is_playing:
-                if st.button("⏸", key="pause_btn"):
-                    st.session_state.is_playing = False
-                    st.rerun()
-            else:
-                if st.button("▶", key="play_btn"):
-                    st.session_state.is_playing = True
-                    st.rerun()
-        
-        with col2:
-            selected_index = st.select_slider(
-                "",
-                options=range(len(st.session_state.time_list)),
-                value=st.session_state.current_time_index,
-                format_func=lambda x: st.session_state.time_list[x],
-                label_visibility="collapsed"
-            )
-            if selected_index != st.session_state.current_time_index:
-                st.session_state.current_time_index = selected_index
-                st.session_state.is_playing = False
-                st.rerun()
-        
-        with col3:
-            st.markdown(f"**{current_time_str}**")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
 
+# Add watershed boundary layer
 if st.session_state.active_gdf is not None:
-    layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
-                            stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
+    layers.append(pdk.Layer(
+        "GeoJsonLayer",
+        st.session_state.active_gdf.__geo_interface__,
+        stroked=True,
+        filled=False,
+        get_line_color=[255, 255, 255],
+        line_width_min_pixels=3
+    ))
 
-# Render the fullscreen map
+# -----------------------------
+# 7. RENDER MAP (FULLSCREEN)
+# -----------------------------
 st.pydeck_chart(pdk.Deck(
     layers=layers,
     initial_view_state=st.session_state.map_view,
     map_style="mapbox://styles/mapbox/dark-v11"
 ))
+
+# -----------------------------
+# 8. CONTROLS (BOTTOM OVERLAY)
+# -----------------------------
+if st.session_state.time_list:
+    col1, col2, col3 = st.columns([1, 12, 2])
+    
+    with col1:
+        if st.session_state.is_playing:
+            if st.button("⏸", key="pause_btn"):
+                st.session_state.is_playing = False
+                st.rerun()
+        else:
+            if st.button("▶", key="play_btn"):
+                st.session_state.is_playing = True
+                st.rerun()
+    
+    with col2:
+        selected_index = st.select_slider(
+            "Time",
+            options=range(len(st.session_state.time_list)),
+            value=st.session_state.current_time_index,
+            format_func=lambda x: st.session_state.time_list[x],
+            label_visibility="collapsed"
+        )
+        if selected_index != st.session_state.current_time_index:
+            st.session_state.current_time_index = selected_index
+            st.session_state.is_playing = False
+            st.rerun()
+    
+    with col3:
+        st.markdown(f"### {st.session_state.time_list[st.session_state.current_time_index]}")
