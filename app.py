@@ -116,28 +116,38 @@ iframe[title="streamlit_pydeck.pydeck_chart"] {
 }
 
 /* --- FLOATING CONTROLS AT BOTTOM (your play/slider row) --- */
-.controls-float {
+/* Float the ENTIRE Streamlit element-container that contains our anchor */
+div[data-testid="element-container"]:has(#controls-anchor) {
     position: fixed !important;
     bottom: 18px !important;
-    left: 420px !important;   /* sidebar (400) + padding */
+    left: 420px !important;   /* sidebar(400) + 20 */
     right: 18px !important;
-    z-index: 1200 !important;
+    z-index: 3000 !important;
 
     background: rgba(15, 15, 15, 0.92) !important;
     padding: 12px 20px !important;
     border-radius: 999px !important;
     border: 1px solid rgba(255,255,255,0.12);
     backdrop-filter: blur(10px);
+
+    display: block !important;
+    pointer-events: auto !important;
 }
 
-/* Make your play button circular */
-.controls-float .stButton button {
+/* Make sure widgets inside are visible */
+div[data-testid="element-container"]:has(#controls-anchor) * {
+    visibility: visible !important;
+}
+
+/* Circular play button */
+div[data-testid="element-container"]:has(#controls-anchor) .stButton button {
     border-radius: 999px !important;
     width: 44px !important;
     height: 44px !important;
     padding: 0 !important;
     font-size: 18px !important;
 }
+
 </style>
 """, unsafe_allow_html=True)
 st.markdown("""
@@ -342,36 +352,40 @@ st.pydeck_chart(deck, use_container_width=True, height=1000)
 # -----------------------------
 # 8. CONTROLS (positioned at bottom by CSS)
 # -----------------------------
+# -----------------------------
+# 8. CONTROLS (floating via anchor CSS)
+# -----------------------------
 if st.session_state.time_list:
-    st.markdown('<div class="controls-float">', unsafe_allow_html=True)
+    with st.container():
+        # anchor must be inside the SAME container as the widgets
+        st.markdown('<div id="controls-anchor"></div>', unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 10, 2])
+        col1, col2, col3 = st.columns([1, 10, 2])
 
-    with col1:
-        if st.session_state.is_playing:
-            if st.button("⏸", key="pause_btn"):
+        with col1:
+            if st.session_state.is_playing:
+                if st.button("⏸", key="pause_btn"):
+                    st.session_state.is_playing = False
+                    st.rerun()
+            else:
+                if st.button("▶", key="play_btn"):
+                    st.session_state.is_playing = True
+                    st.rerun()
+
+        with col2:
+            selected_index = st.select_slider(
+                "",
+                options=range(len(st.session_state.time_list)),
+                value=st.session_state.current_time_index,
+                format_func=lambda x: st.session_state.time_list[x],
+                label_visibility="collapsed",
+            )
+            if selected_index != st.session_state.current_time_index:
+                st.session_state.current_time_index = selected_index
                 st.session_state.is_playing = False
                 st.rerun()
-        else:
-            if st.button("▶", key="play_btn"):
-                st.session_state.is_playing = True
-                st.rerun()
 
-    with col2:
-        selected_index = st.select_slider(
-            "",
-            options=range(len(st.session_state.time_list)),
-            value=st.session_state.current_time_index,
-            format_func=lambda x: st.session_state.time_list[x],
-            label_visibility="collapsed",
-        )
-        if selected_index != st.session_state.current_time_index:
-            st.session_state.current_time_index = selected_index
-            st.session_state.is_playing = False
-            st.rerun()
+        with col3:
+            st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
 
-    with col3:
-        st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
