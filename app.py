@@ -29,17 +29,18 @@ UTC_TZ = ZoneInfo("UTC")
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar_state="expanded")
 
 # =============================
-# 2) CSS (Kept exactly as original)
+# 2) CSS (FULL RESTORATION + SLIDER FIX)
 # =============================
 st.markdown(
     """
 <style>
+/* --- 1. GLOBAL LAYOUT --- */
 html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"]{
   height:100vh !important; width:100vw !important;
   margin:0 !important; padding:0 !important;
   overflow:hidden !important;
+  background:#000 !important;
 }
-body { background:#000 !important; }
 
 .main .block-container{
   padding:0 !important; margin:0 !important;
@@ -50,7 +51,7 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
   display:none !important; height:0 !important; visibility:hidden !important;
 }
 
-/* Sidebar locked */
+/* --- 2. SIDEBAR (Locked & Styled) --- */
 [data-testid="stSidebar"]{
   position:fixed !important;
   left:0 !important; top:0 !important;
@@ -63,9 +64,7 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
   border-right:1px solid rgba(255,255,255,0.08);
   z-index:5000 !important;
 }
-[data-testid="stSidebarResizer"],
-[data-testid="collapsedControl"],
-button[title="Collapse sidebar"]{
+[data-testid="stSidebarResizer"], [data-testid="collapsedControl"], button[title="Collapse sidebar"]{
   display:none !important;
 }
 [data-testid="stSidebarContent"]{
@@ -73,102 +72,62 @@ button[title="Collapse sidebar"]{
   overflow:auto !important;
   padding:10px 12px !important;
 }
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ gap:0.28rem !important; }
-[data-testid="stSidebar"] .block-container{ padding:0 !important; margin:0 !important; }
 
-/* DeckGL fullscreen, UNDER controls */
+/* Sidebar Button Styling */
+[data-testid="stSidebar"] .stButton button{
+  width:100% !important;
+  border-radius:10px !important;
+  height:44px !important;
+  font-weight:650 !important;
+}
+
+/* --- 3. MAP OVERLAY --- */
 #deckgl-wrapper{
   position:fixed !important;
   inset:0 !important;
-  width:100vw !important;
-  height:100vh !important;
-  margin:0 !important;
-  padding:0 !important;
-  transform:none !important;
   z-index: 0 !important;
 }
-#view-default-view,
-#view-default-view > div,
-#view-default-view .mapboxgl-map,
-#view-default-view .mapboxgl-canvas-container,
-#view-default-view .overlays{
-  position:absolute !important;
-  inset:0 !important;
-  width:100% !important;
-  height:100% !important;
+
+/* --- 4. FLOATING CONTROL BAR (The Slider Fix) --- */
+/* The main container must allow clicks to pass through to the map, 
+   but we RE-ENABLE them for the controls. */
+[data-testid="stAppViewContainer"] {
+    pointer-events: none !important;
 }
-canvas#deckgl-overlay,
-canvas.mapboxgl-canvas{
-  position:absolute !important;
-  inset:0 !important;
-  width:100% !important;
-  height:100% !important;
+[data-testid="stSidebar"], .control-bar-wrapper, .stButton, .stSlider, .stSelectSlider {
+    pointer-events: auto !important;
 }
 
-/* Floating control bar */
-.control-bar{
+.control-bar-wrapper {
   position: fixed !important;
   left: 420px !important;
   right: 18px !important;
   bottom: 18px !important;
-  z-index: 12000 !important;
+  z-index: 1000000 !important; /* Extremely high to stay on top */
   background: rgba(15,15,15,0.92) !important;
   padding: 12px 16px !important;
   border-radius: 999px !important;
   border: 1px solid rgba(255,255,255,0.12) !important;
   backdrop-filter: blur(10px);
 }
-.control-bar *{ pointer-events: auto !important; }
-.control-bar .stButton button{
-  border-radius:999px !important;
-  width:44px !important;
-  height:44px !important;
-  padding:0 !important;
-  font-size:18px !important;
+
+/* Round Play/Pause Button */
+.control-bar-wrapper .stButton button {
+  border-radius: 999px !important;
+  width: 44px !important;
+  height: 44px !important;
+  padding: 0 !important;
+  font-size: 18px !important;
 }
 
-/* Output links */
-.output-link a{
-  text-decoration:none !important;
-  font-weight:600 !important;
-}
+/* --- 5. MISC --- */
+.output-link a{ text-decoration:none !important; font-weight:600 !important; }
 .output-link a:hover{ text-decoration:underline !important; }
 
-/* Sidebar buttons */
-[data-testid="stSidebar"] .stButton button{
-  width:100% !important;
-  border-radius:10px !important;
-  height:44px !important;
-  font-weight:650 !important;
-/* The critical fix: Allow clicks to pass through to the slider */
-[data-testid="stAppViewContainer"] {
-    pointer-events: none !important;
-}
-[data-testid="stSidebar"], .control-bar, .stButton, .stSlider, .stSelectSlider {
-    pointer-events: auto !important;
-}
-
-/* Ensure the control bar is visible and interactive */
-.control-bar {
-    position: fixed !important;
-    left: 420px !important;
-    right: 30px !important;
-    bottom: 30px !important;
-    height: 70px !important; /* Fixed height to prevent layout shifts */
-    z-index: 999999 !important;
-    background: rgba(25,25,25,0.95) !important;
-    padding: 5px 20px !important;
-    border-radius: 15px !important;
-    border: 1px solid rgba(255,255,255,0.2) !important;
-    backdrop-filter: blur(15px);
-    display: flex;
-    align-items: center;
-}
 </style>
 """,
     unsafe_allow_html=True,
 )
-
 # =============================
 # 3) STATE
 # =============================
@@ -446,16 +405,17 @@ st.pydeck_chart(pdk.Deck(
 ), use_container_width=True, height=1000)
 
 # =============================
-# 7) FLOATING CONTROLS (REWRITTEN)
+# 7) FLOATING CONTROLS
 # =============================
 if st.session_state.time_list:
-    st.markdown('<div class="control-bar">', unsafe_allow_html=True)
+    # This wrapper div matches the CSS class above
+    st.markdown('<div class="control-bar-wrapper">', unsafe_allow_html=True)
     
-    # Using a flatter layout for better responsiveness
     col_play, col_slider, col_txt = st.columns([1, 10, 3])
     
     with col_play:
-        if st.button("⏸" if st.session_state.is_playing else "▶", key="play_btn"):
+        btn_icon = "⏸" if st.session_state.is_playing else "▶"
+        if st.button(btn_icon, key="play_btn"):
             st.session_state.is_playing = not st.session_state.is_playing
             st.rerun()
             
@@ -470,16 +430,15 @@ if st.session_state.time_list:
         )
         if idx != st.session_state.current_time_index:
             st.session_state.current_time_index = idx
+            # If user manually slides, stop the auto-play
             st.session_state.is_playing = False
             st.rerun()
             
     with col_txt:
-        # Clean timestamp display
-        ts_label = st.session_state.time_list[st.session_state.current_time_index]
-        st.markdown(f'<p style="color:#01a0fe; margin:0; font-family:monospace; font-size:15px; font-weight:bold;">{ts_label}</p>', unsafe_allow_html=True)
+        ts = st.session_state.time_list[st.session_state.current_time_index]
+        st.markdown(f'<p style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>', unsafe_allow_html=True)
         
     st.markdown("</div>", unsafe_allow_html=True)
-
 # =============================
 # 8) OUTPUTS (STYLIZED BAR CHART)
 # =============================
@@ -510,4 +469,5 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
