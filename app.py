@@ -10,24 +10,46 @@ import tempfile
 import os
 import zipfile
 import time
-import gc # Garbage Collector to free RAM
+import gc
 from pathlib import Path
 from datetime import datetime, timedelta
 import leafmap.foliumap as leafmap
 import plotly.express as px
 
-# --- 1. PAGE CONFIG ---
+# --- 1. PAGE CONFIG & FULL-HEIGHT CSS ---
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", page_icon="🛰️")
 
-# --- 2. CACHING & MEMORY MGMT ---
-# This prevents the app from re-downloading/re-processing the same hour
+# This CSS forces the map container to stay large and prevents shrinking
+st.markdown("""
+    <style>
+        .block-container { padding: 1rem !important; }
+        /* Target the streamlit iframe specifically to maintain height */
+        iframe { 
+            height: 80vh !important; 
+            min-height: 600px !important; 
+            width: 100% !important; 
+            border-radius: 10px;
+        }
+        /* Style the play button to be prominent */
+        .stButton button { height: 3em; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. SESSION STATE ---
+if 'processed_df' not in st.session_state: st.session_state.processed_df = None
+if 'raster_cache' not in st.session_state: st.session_state.raster_cache = {}
+if 'time_list' not in st.session_state: st.session_state.time_list = []
+if 'playing' not in st.session_state: st.session_state.playing = False
+if 'current_idx' not in st.session_state: st.session_state.current_idx = 0
+if 'active_gdf' not in st.session_state: st.session_state.active_gdf = None
+
+# --- 3. HELPERS & DATA CACHING ---
 @st.cache_data(show_spinner=False, max_entries=24)
 def get_mrms_data(ts_utc):
     ts_str = ts_utc.strftime("%Y%m%d-%H1500") 
     url = f"https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_00.00/{ts_utc.strftime('%Y%m%d')}/MRMS_RadarOnly_QPE_15M_00.00_{ts_str}.grib2.gz"
     
-    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp_file:
-        tmp_path = tmp_file.name
+    tmp_path = tempfile.NamedTemporaryFile(suffix=".grib2", delete=False).name
     try:
         r = requests.get(url, stream=True, timeout=10)
         if r.status_code == 200:
@@ -35,22 +57,14 @@ def get_mrms_data(ts_utc):
                 shutil.copyfileobj(gz, f)
             with xr.open_dataset(tmp_path, engine="cfgrib") as ds:
                 da = ds[list(ds.data_vars)[0]].load()
-                # Correct coordinates
                 da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
                 da = da.rio.write_crs("EPSG:4326")
                 return da
-    except Exception as e:
-        return None
+    except: return None
     finally:
         if os.path.exists(tmp_path): os.remove(tmp_path)
     return None
 
-if 'raster_cache' not in st.session_state: st.session_state.raster_cache = {}
-if 'time_list' not in st.session_state: st.session_state.time_list = []
-if 'playing' not in st.session_state: st.session_state.playing = False
-if 'current_idx' not in st.session_state: st.session_state.current_idx = 0
-
-# --- 3. HELPERS ---
 def get_tz_offset(dt):
     edt_s = datetime(dt.year, 3, 8 + (6 - datetime(dt.year, 3, 1).weekday()) % 7)
     edt_e = datetime(dt.year, 11, 1 + (6 - datetime(dt.year, 11, 1).weekday()) % 7)
@@ -79,8 +93,8 @@ with st.sidebar:
                 st.session_state.active_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
 
     if st.button("🚀 Process Data", use_container_width=True):
-        if 'active_gdf' in st.session_state:
-            # Clear old cache to save RAM
+        if st.session_state.active_gdf is not None:
+            # Cleanup previous files
             for f in st.session_state.raster_cache.values():
                 if os.path.exists(f): os.remove(f)
             st.session_state.raster_cache = {}
@@ -95,13 +109,13 @@ with st.sidebar:
                 ts_utc = ts if tz_mode == "UTC" else ts + timedelta(hours=get_tz_offset(ts))
                 da = get_mrms_data(ts_utc)
                 if da is not None:
-                    # Save small GeoTIFF for Map
+                    # Save Raster for Map
                     map_da = da.where(da > 0.1, np.nan)
                     tf = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
                     map_da.rio.to_raster(tf)
                     st.session_state.raster_cache[ts.strftime("%Y-%m-%d %H:%M")] = tf
                     
-                    # Calculate Stats
+                    # Stats calculation
                     clipped = da.rio.clip(st.session_state.active_gdf.geometry, "EPSG:4326")
                     mean_val = float(clipped.mean()) if not clipped.isnull().all() else 0.0
                     sl.append({"time": ts, "rain_in": max(0.0, mean_val/25.4)})
@@ -111,58 +125,71 @@ with st.sidebar:
             
             st.session_state.processed_df = pd.DataFrame(sl).set_index("time")
             st.session_state.time_list = list(st.session_state.raster_cache.keys())
-            gc.collect() # Force clear RAM
+            st.session_state.current_idx = 0
+            gc.collect()
 
-# --- 5. MAP RENDERING (THE "FIX") ---
+# --- 5. MAIN CONTENT (MAP) ---
 map_placeholder = st.empty()
 
 def render_map_frame(idx):
-    # Centering logic
+    # Determine center/zoom
     center, zoom = [40.1, -74.5], 8
-    if 'active_gdf' in st.session_state:
+    if st.session_state.active_gdf is not None:
         b = st.session_state.active_gdf.total_bounds
         center = [(b[1]+b[3])/2, (b[0]+b[2])/2]
-        zoom = 11
+        zoom = 12 # Tighter zoom for local sites
 
-    m = leafmap.Map(center=center, zoom=zoom)
-    if 'active_gdf' in st.session_state:
-        m.add_gdf(st.session_state.active_gdf, layer_name="Site")
+    m = leafmap.Map(center=center, zoom=zoom, draw_control=False, measure_control=False)
     
-    if idx < len(st.session_state.time_list):
+    if st.session_state.active_gdf is not None:
+        m.add_gdf(st.session_state.active_gdf, layer_name="Watershed Boundary")
+    
+    if st.session_state.time_list and idx < len(st.session_state.time_list):
         t_key = st.session_state.time_list[idx]
         tif_path = st.session_state.raster_cache.get(t_key)
         if tif_path and os.path.exists(tif_path):
-            m.add_raster(tif_path, colormap="jet", opacity=0.7, vmin=0.1, vmax=3.0)
+            # High visibility radar settings
+            m.add_raster(tif_path, colormap="jet", opacity=0.75, vmin=0.1, vmax=3.0)
     
     with map_placeholder:
-        m.to_streamlit(key=f"map_{idx}") # Key prevents map duplication in RAM
+        # Key forces Streamlit to respect the frame and height
+        m.to_streamlit(key=f"map_frame_{idx}", height=700)
 
-# --- 6. DISPLAY ---
+# --- 6. TIMELINE CONTROLS ---
 if st.session_state.time_list:
     c_p, c_s = st.columns([1, 6])
-    if c_p.button("⏹️ Stop" if st.session_state.playing else "▶️ Play"):
+    
+    btn_label = "⏹️ Stop" if st.session_state.playing else "▶️ Play Animation"
+    if c_p.button(btn_label):
         st.session_state.playing = not st.session_state.playing
         st.rerun()
 
     st.session_state.current_idx = c_s.select_slider(
-        "Timeline", options=range(len(st.session_state.time_list)),
+        "Timeline Slider", 
+        options=range(len(st.session_state.time_list)),
         value=st.session_state.current_idx,
-        format_func=lambda x: st.session_state.time_list[x]
+        format_func=lambda x: st.session_state.time_list[x],
+        label_visibility="collapsed"
     )
 
     if st.session_state.playing:
         for i in range(st.session_state.current_idx, len(st.session_state.time_list)):
             st.session_state.current_idx = i
             render_map_frame(i)
-            time.sleep(0.3)
+            time.sleep(0.4)
             if not st.session_state.playing: break
         st.session_state.playing = False
         st.rerun()
     else:
         render_map_frame(st.session_state.current_idx)
 else:
-    # Show empty map if nothing processed
+    # Always render a map even if no data is processed
     render_map_frame(0)
 
-if 'processed_df' in st.session_state:
-    st.plotly_chart(px.bar(st.session_state.processed_df.reset_index(), x='time', y='rain_in', template="plotly_dark"), use_container_width=True)
+# --- 7. CHART ---
+if st.session_state.processed_df is not None:
+    st.plotly_chart(px.bar(st.session_state.processed_df.reset_index(), 
+                           x='time', y='rain_in', 
+                           title="Watershed Average Rainfall (Inches)",
+                           template="plotly_dark",
+                           color_discrete_sequence=['#00d4ff']), use_container_width=True)
