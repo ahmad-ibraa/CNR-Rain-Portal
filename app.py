@@ -178,27 +178,36 @@ section.main div[data-testid="stButton"] button{
 # -----------------------------
 # 3) STATE
 # -----------------------------
-if "radar_cache" not in st.session_state: st.session_state.radar_cache = {}
-if "time_list" not in st.session_state: st.session_state.time_list = []
-if "active_gdf" not in st.session_state: st.session_state.active_gdf = None
-if "basin_vault" not in st.session_state: st.session_state.basin_vault = {}   # basin_name -> df
-if "map_view" not in st.session_state: st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
-if "img_dir" not in st.session_state: st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
-if "is_playing" not in st.session_state: st.session_state.is_playing = False
-if "current_time_index" not in st.session_state: st.session_state.current_time_index = 0
-if "processing_msg" not in st.session_state: st.session_state.processing_msg = ""
+if "radar_cache" not in st.session_state:
+    st.session_state.radar_cache = {}
+if "time_list" not in st.session_state:
+    st.session_state.time_list = []
+if "active_gdf" not in st.session_state:
+    st.session_state.active_gdf = None
+if "basin_vault" not in st.session_state:
+    st.session_state.basin_vault = {}  # basin_name -> df
+if "map_view" not in st.session_state:
+    st.session_state.map_view = pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9)
+if "img_dir" not in st.session_state:
+    st.session_state.img_dir = tempfile.mkdtemp(prefix="radar_png_")
+if "is_playing" not in st.session_state:
+    st.session_state.is_playing = False
+if "current_time_index" not in st.session_state:
+    st.session_state.current_time_index = 0
+if "processing_msg" not in st.session_state:
+    st.session_state.processing_msg = ""
 
-RADAR_COLORS = ['#76fffe', '#01a0fe', '#0001ef', '#01ef01', '#019001', '#ffff01', '#e7c001', '#ff9000', '#ff0101']
+RADAR_COLORS = ["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"]
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
 
 def csv_download_link(df: pd.DataFrame, filename: str, label: str):
-    """Create a 'hyperlink' that downloads a CSV via a data URL."""
+    """Clickable link that downloads a CSV via a data URL."""
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     b64 = base64.b64encode(csv_bytes).decode()
-    href = f'data:text/csv;base64,{b64}'
+    href = f"data:text/csv;base64,{b64}"
     st.markdown(
         f'<div class="output-link">📄 <a download="{filename}" href="{href}">{label}</a></div>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
 # -----------------------------
@@ -237,13 +246,14 @@ def get_radar_image(dt_utc):
             data = subset.values.astype("float32")
             data[data < 0.1] = np.nan
 
-            # IMPORTANT: include date to avoid overwriting when running multiple days
             img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_utc.strftime('%Y%m%d_%H%M')}.png")
             plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
 
             bounds = [
-                float(subset.longitude.min()), float(subset.latitude.min()),
-                float(subset.longitude.max()), float(subset.latitude.max())
+                float(subset.longitude.min()),
+                float(subset.latitude.min()),
+                float(subset.longitude.max()),
+                float(subset.latitude.max()),
             ]
             return img_path, max(0.0, site_mean / 25.4), bounds
 
@@ -265,8 +275,8 @@ with st.sidebar:
 
     c1, c2 = st.columns(2)
     hours = [f"{h:02d}:00" for h in range(24)]
-    s_time = c1.selectbox("Start", hours, index=19)
-    e_time = c2.selectbox("End", hours, index=21)
+    s_time = c1.selectbox("Start Time", hours, index=19)
+    e_time = c2.selectbox("End Time", hours, index=21)
 
     up_zip = st.file_uploader("Watershed Boundary (ZIP)", type="zip")
     basin_name = "Default_Basin"
@@ -283,16 +293,15 @@ with st.sidebar:
                 st.session_state.map_view = pdk.ViewState(
                     latitude=(b[1] + b[3]) / 2,
                     longitude=(b[0] + b[2]) / 2,
-                    zoom=11
+                    zoom=11,
                 )
 
-    # status label
     if st.session_state.processing_msg:
         st.caption(st.session_state.processing_msg)
 
     if st.button("Process Radar Data", use_container_width=True):
         if st.session_state.active_gdf is None:
-            st.session_state.processing_msg = "Upload a watershed ZIP first."
+            st.session_state.processing_msg = "Please upload a watershed boundary ZIP first."
             st.rerun()
 
         s_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
@@ -304,7 +313,7 @@ with st.sidebar:
         msg = st.empty()
 
         for i, ts in enumerate(tr):
-            msg.info(f"Downloading & rendering MRMS frame {i+1}/{len(tr)} ({ts.strftime('%Y-%m-%d %H:%M')}) …")
+            msg.info(f"Downloading & rendering MRMS frame {i+1}/{len(tr)} — {ts.strftime('%Y-%m-%d %H:%M')}")
             ts_utc = ts if tz_mode == "UTC" else ts + timedelta(hours=5)
 
             path, val, bnds = get_radar_image(ts_utc)
@@ -315,24 +324,21 @@ with st.sidebar:
             pb.progress((i + 1) / len(tr))
 
         msg.success(f"Complete: {len(cache)} frames processed for {basin_name}.")
-        st.session_state.processing_msg = f"Last run: {basin_name} ({len(cache)} frames)"
+        st.session_state.processing_msg = f"Last run: {basin_name} • {len(cache)} frames"
         st.session_state.radar_cache = cache
         st.session_state.time_list = list(cache.keys())
         st.session_state.current_time_index = 0
         st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
-
         st.rerun()
 
-    # outputs list (click-to-download)
     if st.session_state.basin_vault:
         st.divider()
         st.subheader("Outputs")
 
-        # show all outputs as clickable downloads
+        # list all outputs as click-to-download
         for name, df in st.session_state.basin_vault.items():
             csv_download_link(df, filename=f"{name}.csv", label=f"{name}.csv")
 
-        # optional plot viewer for selected output
         st.divider()
         pick = st.selectbox("Rainfall Summary", options=list(st.session_state.basin_vault.keys()))
         if st.button("View Rainfall Summary", use_container_width=True):
@@ -362,9 +368,7 @@ layers = []
 if st.session_state.time_list:
     current_time_str = st.session_state.time_list[st.session_state.current_time_index]
     curr = st.session_state.radar_cache[current_time_str]
-    layers.append(
-        pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70)
-    )
+    layers.append(pdk.Layer("BitmapLayer", image=curr["path"], bounds=curr["bounds"], opacity=0.70))
 
 if st.session_state.active_gdf is not None:
     layers.append(
@@ -387,10 +391,11 @@ deck = pdk.Deck(
 st.pydeck_chart(deck, use_container_width=True, height=1000)
 
 # -----------------------------
-# 8) CONTROLS (always visible)
+# 8) CONTROLS (floated by CSS)
 # -----------------------------
 if st.session_state.time_list:
-    # Play/pause button (this is the ONLY main button)
+    # IMPORTANT: keep these in main (not sidebar) and keep it simple.
+
     if st.session_state.is_playing:
         if st.button("⏸", key="pause_btn"):
             st.session_state.is_playing = False
@@ -400,7 +405,6 @@ if st.session_state.time_list:
             st.session_state.is_playing = True
             st.rerun()
 
-    # Timeline slider (main-area slider will be floated by CSS)
     selected_index = st.select_slider(
         " ",
         options=range(len(st.session_state.time_list)),
@@ -414,10 +418,7 @@ if st.session_state.time_list:
         st.session_state.is_playing = False
         st.rerun()
 
-    # Floating time label (we control it with our own div)
     st.markdown(
         f'<div id="time-float">{st.session_state.time_list[st.session_state.current_time_index]}</div>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
-
