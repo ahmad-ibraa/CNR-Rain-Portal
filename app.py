@@ -275,6 +275,8 @@ def subset_to_bbox(da: xr.DataArray, bounds) -> xr.DataArray:
     else:
         da = da.sel(latitude=slice(miny, maxy), longitude=slice(minx, maxx))
     return da
+def drop_time_coord(da):
+    return da.drop_vars("time", errors="ignore")
 
 def save_frame_png(da: xr.DataArray, dt_local: datetime) -> tuple[str, list]:
     data = da.values.astype("float32")
@@ -484,30 +486,45 @@ with st.sidebar:
 
             # ---------- 6) Scale each RO 15-min frame using the correct MRMS hour-end bin ----------
             msg.info("Applying hourly scaling to 15-min RO frames…")
+            
             mrms_ends = [pd.to_datetime(str(x)).to_pydatetime() for x in mrms.time.values]
-
             ro_scaled_list, ro_scaled_times = [], []
+            
             for t in ro.time.values:
                 tdt = pd.to_datetime(str(t)).to_pydatetime()
-
+            
                 hour_end = next((T for T in mrms_ends if T >= tdt), None)
                 if hour_end is None:
                     continue
                 if tdt < hour_end - timedelta(minutes=45):
                     continue
-
+            
                 hour_idx = mrms_ends.index(hour_end)
-                scale_raster = scaling_da.isel(time=hour_idx)
-
-                scaled = ro.sel(time=tdt) * scale_raster
+            
+                # remove scalar time coord from both operands (prevents concat crash)
+                ro_slice_15  = drop_time_coord(ro.sel(time=tdt))
+                scale_raster = drop_time_coord(scaling_da.isel(time=hour_idx))
+            
+                # (optional safety) ensure same grid
+                # scale_raster = scale_raster.interp_like(ro_slice_15, method="nearest")
+            
+                scaled = (ro_slice_15 * scale_raster).astype("float32")
+            
+                # keep coords/dims consistent for concat
+                scaled = normalize_grid(scaled)
+            
                 ro_scaled_list.append(scaled)
                 ro_scaled_times.append(tdt)
-
+            
             if len(ro_scaled_list) == 0:
-                raise RuntimeError("Scaling produced no valid frames. Check data availability/time alignment.")
+                raise RuntimeError("Scaling produced zero frames (check RO/MRMS overlap and time alignment).")
+            
+            ro_scaled_da = xr.concat(ro_scaled_list, dim="time")
+            ro_scaled_da = ro_scaled_da.assign_coords(time=ro_scaled_times)
+            
+            step_i += 8
+            pb.progress(min(1.0, step_i / total_steps))
 
-            ro_scaled_da = xr.concat(ro_scaled_list, dim="time").assign_coords(time=ro_scaled_times)
-            step_i += 8; pb.progress(min(1.0, step_i/total_steps))
 
             # ---------- 7) Render frames for playback ----------
             msg.info("Rendering map frames for playback…")
@@ -634,5 +651,6 @@ if st.session_state.time_list:
 
         with c3:
             st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
+
 
 
