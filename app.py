@@ -17,61 +17,55 @@ from matplotlib.colors import ListedColormap
 import rioxarray 
 
 # -----------------------------
-# 1. PAGE CONFIG & PERMANENT LAYOUT
+# 1. PAGE CONFIG & LOCKDOWN CSS
 # -----------------------------
 st.set_page_config(layout="wide", page_title="CNR Radar Portal", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
-    /* 1. MAP: Force to true 100% background covering everything */
-    .stPydeckChart {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100vw !important;
+    /* 1. Reset standard Streamlit padding to zero */
+    .main .block-container {
+        padding: 0 !important;
+        margin: 0 !important;
+        max-width: 100% !important;
         height: 100vh !important;
-        z-index: -1 !important;
     }
 
-    /* 2. SIDEBAR: Lock width, disable resize handle, and hide collapse button */
+    /* 2. Force the Map container to fill the window height exactly */
+    /* We use 100vh minus the header height if any remained */
+    .stPydeckChart {
+        height: 100vh !important; 
+        width: 100% !important;
+    }
+
+    /* 3. Sidebar Lockdown: Fixed width, no resize, no collapse */
     [data-testid="stSidebar"] {
         min-width: 400px !important;
         max-width: 400px !important;
-        width: 400px !important;
         background-color: #111 !important;
     }
     
-    /* Disable the resize 'drag' bar */
+    /* Remove the 'drag to resize' handle */
     [data-testid="stSidebarResizer"] {
         display: none !important;
     }
 
-    /* Hide the 'X' button that allows hiding the sidebar */
+    /* Remove the 'Collapse' (X) button */
     button[title="Collapse sidebar"] {
         display: none !important;
     }
 
-    /* 3. MAIN CONTAINER: Make it transparent so the map shows through */
-    [data-testid="stAppViewContainer"] {
-        background-color: transparent !important;
-    }
-    
-    .main .block-container {
-        padding: 0 !important;
-        margin: 0 !important;
-    }
-
-    /* 4. SLIDER: Floating at bottom */
+    /* 4. Timeline Slider: Anchored at bottom of the map */
     .stSlider {
         position: fixed !important;
-        bottom: 20px !important;
+        bottom: 30px !important;
         left: 430px !important;
         right: 30px !important;
-        z-index: 1000 !important;
-        background: rgba(20, 20, 20, 0.9) !important;
+        z-index: 9999 !important;
+        background: rgba(15, 15, 15, 0.9) !important;
         padding: 10px 30px !important;
         border-radius: 50px !important;
-        border: 1px solid #333;
+        border: 1px solid #444;
     }
 
     header, footer { visibility: hidden !important; }
@@ -79,7 +73,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------
-# 2. STATE & ENGINE
+# 2. DATA ENGINE
 # -----------------------------
 if 'radar_cache' not in st.session_state: st.session_state.radar_cache = {}
 if 'time_list' not in st.session_state: st.session_state.time_list = []
@@ -126,7 +120,7 @@ def get_radar_image(dt_utc):
         if os.path.exists(tmp_grib): os.remove(tmp_grib)
 
 # -----------------------------
-# 3. SIDEBAR (PERMANENT)
+# 3. SIDEBAR (LOCKED)
 # -----------------------------
 with st.sidebar:
     st.title("CNR GIS Portal")
@@ -140,7 +134,6 @@ with st.sidebar:
     e_time = c2.selectbox("End", hours, index=21)
 
     up_zip = st.file_uploader("Upload Watershed ZIP", type="zip")
-    basin_name = "Default_Basin"
     if up_zip:
         basin_name = up_zip.name.replace(".zip", "")
         with tempfile.TemporaryDirectory() as td:
@@ -168,12 +161,12 @@ with st.sidebar:
                     stats.append({"time": ts, "rain_in": val})
                 pb.progress((i + 1) / len(tr))
             st.session_state.radar_cache, st.session_state.time_list = cache, list(cache.keys())
-            st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
+            st.session_state.basin_vault[up_zip.name.replace(".zip", "")] = pd.DataFrame(stats)
 
     if st.session_state.basin_vault:
         st.write("---")
         st.subheader("📁 Processed Basins")
-        target_basin = st.selectbox("Select CSV to Download", options=list(st.session_state.basin_vault.keys()))
+        target_basin = st.selectbox("Select Basin File", options=list(st.session_state.basin_vault.keys()))
         df_target = st.session_state.basin_vault[target_basin]
         
         if st.button(f"📊 PLOT {target_basin}", use_container_width=True):
@@ -187,7 +180,7 @@ with st.sidebar:
         st.download_button(f"DOWNLOAD {target_basin}.CSV", data=csv_data, file_name=f"{target_basin}.csv", use_container_width=True)
 
 # -----------------------------
-# 4. MAP (LOCKED FULLSCREEN)
+# 4. MAP (STABLE RENDER)
 # -----------------------------
 layers = []
 if st.session_state.time_list:
@@ -199,6 +192,7 @@ if st.session_state.active_gdf is not None:
     layers.append(pdk.Layer("GeoJsonLayer", st.session_state.active_gdf.__geo_interface__, 
                             stroked=True, filled=False, get_line_color=[255, 255, 255], line_width_min_pixels=3))
 
+# Render normally without 'fixed' position to ensure visibility
 st.pydeck_chart(pdk.Deck(
     layers=layers,
     initial_view_state=st.session_state.map_view,
