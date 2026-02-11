@@ -140,6 +140,50 @@ iframe[title="streamlit_pydeck.pydeck_chart"] {
 }
 </style>
 """, unsafe_allow_html=True)
+st.markdown("""
+<style>
+/* ---- DECK.GL ROOT: force fullscreen, kill offsets ---- */
+#deckgl-wrapper {
+  position: fixed !important;
+  inset: 0 !important;          /* top/right/bottom/left = 0 */
+  left: 0 !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  transform: none !important;
+}
+
+/* ---- Ensure all deck/map wrappers inherit full viewport ---- */
+#view-default-view,
+#view-default-view > div,
+#view-default-view .mapboxgl-map,
+#view-default-view .mapboxgl-canvas-container,
+#view-default-view .overlays {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ---- Force BOTH canvases to fill (map + deck overlay) ---- */
+canvas#deckgl-overlay,
+canvas.mapboxgl-canvas {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ---- If anything still tries to size itself to px dims, kill it ---- */
+#deckgl-wrapper * {
+  max-height: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -330,3 +374,4 @@ if st.session_state.time_list:
         st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
