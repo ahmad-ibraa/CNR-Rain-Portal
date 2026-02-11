@@ -85,11 +85,13 @@ st.markdown("""
     .main .block-container {
         padding-top: 0 !important;
         padding-bottom: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
         max-width: 100% !important;
     }
 
     /* Make map fullscreen */
-    .stPydeckChart {
+    iframe[title="streamlit_pydeck.pydeck_chart"] {
         position: fixed !important;
         top: 0 !important;
         left: 0 !important;
@@ -98,14 +100,22 @@ st.markdown("""
         z-index: 0 !important;
     }
 
-    /* Sidebar overlay */
+    /* Sidebar overlay - always show toggle button */
     [data-testid="stSidebar"] {
         z-index: 999 !important;
         background-color: rgba(17, 17, 17, 0.95) !important;
         backdrop-filter: blur(10px);
     }
+    
+    /* Keep sidebar toggle button visible */
+    [data-testid="collapsedControl"] {
+        z-index: 1000 !important;
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+    }
 
-    /* Style buttons as circular */
+    /* Style play/pause buttons as circular */
     .stButton button {
         border-radius: 50% !important;
         width: 50px !important;
@@ -118,8 +128,8 @@ st.markdown("""
     /* Hide header and footer */
     header, footer {visibility: hidden;}
     
-    /* Position controls at bottom */
-    div[data-testid="stHorizontalBlock"] {
+    /* Position controls at bottom - using last horizontal block */
+    .main .block-container > div:last-child div[data-testid="stHorizontalBlock"] {
         position: fixed !important;
         bottom: 20px !important;
         left: 420px !important;
@@ -130,6 +140,11 @@ st.markdown("""
         border-radius: 50px !important;
         border: 1px solid #333 !important;
         backdrop-filter: blur(10px) !important;
+    }
+    
+    /* Adjust when sidebar is collapsed */
+    [data-testid="stSidebar"][aria-expanded="false"] ~ .main .block-container > div:last-child div[data-testid="stHorizontalBlock"] {
+        left: 20px !important;
     }
 </style>
 """, unsafe_allow_html=True)
