@@ -241,7 +241,7 @@ def get_radar_image(dt_utc):
 
             data = subset.values.astype("float32")
             data[data < 0.1] = np.nan
-            img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_utc.strftime('%H%M')}.png")
+            img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_utc.strftime('%Y%m%d_%H%M')}.png")
             plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
             bounds = [float(subset.longitude.min()), float(subset.latitude.min()), 
                       float(subset.longitude.max()), float(subset.latitude.max())]
@@ -387,5 +387,6 @@ if st.session_state.time_list:
 
         with col3:
             st.markdown(f"**{st.session_state.time_list[st.session_state.current_time_index]}**")
+
 
 
