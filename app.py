@@ -20,8 +20,20 @@ import time
 import base64
 from zoneinfo import ZoneInfo
 
-NY_TZ  = ZoneInfo("America/New_York")
 UTC_TZ = ZoneInfo("UTC")
+
+# user-selectable timezones (add/remove as you like)
+TZ_OPTIONS = {
+    "UTC": "UTC",
+    "New York (ET)": "America/New_York",
+    "Chicago (CT)": "America/Chicago",
+    "Denver (MT)": "America/Denver",
+    "Los Angeles (PT)": "America/Los_Angeles",
+}
+
+# --- minimum allowed timestamp (absolute truth in UTC) ---
+MIN_UTC = datetime(2020, 10, 15, 0, 0, 0)  # naive UTC baseline
+
 
 # =============================
 # 1) PAGE CONFIG
@@ -243,6 +255,7 @@ defaults = {
     "is_playing": False,
     "current_time_index": 0,
     "processing_msg": "",
+    "tz_name": "America/New_York",   # default selection
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -327,9 +340,14 @@ def align_ro_to_mrms_grid_nearest(ro: xr.DataArray, mrms0: xr.DataArray) -> xr.D
     )
 
 def local_naive_to_utc(dt_local_naive: datetime) -> datetime:
-    aware_local = dt_local_naive.replace(tzinfo=NY_TZ)
+    aware_local = dt_local_naive.replace(tzinfo=LOCAL_TZ)
     aware_utc = aware_local.astimezone(UTC_TZ)
     return aware_utc.replace(tzinfo=None)
+
+def utc_naive_to_local_naive(dt_utc_naive: datetime) -> datetime:
+    aware_utc = dt_utc_naive.replace(tzinfo=UTC_TZ)
+    aware_local = aware_utc.astimezone(LOCAL_TZ)
+    return aware_local.replace(tzinfo=None)
 
 def ceil_to_hour(dt: datetime) -> datetime:
     dt0 = dt.replace(minute=0, second=0, microsecond=0)
@@ -382,8 +400,24 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
 # =============================
 with st.sidebar:
     st.title("CNR GIS Portal")
-    s_date = st.date_input("Start Date", value=datetime.now().date())
-    e_date = st.date_input("End Date", value=datetime.now().date())
+    tz_label = st.selectbox(
+        "Time Zone",
+        list(TZ_OPTIONS.keys()),
+        index=list(TZ_OPTIONS.values()).index(st.session_state.tz_name)
+              if st.session_state.tz_name in TZ_OPTIONS.values()
+              else 1  # default to New York
+    )
+    
+    st.session_state.tz_name = TZ_OPTIONS[tz_label]
+    LOCAL_TZ = ZoneInfo(st.session_state.tz_name)
+
+    min_local_dt = utc_naive_to_local_naive(MIN_UTC)
+    min_local_date = min_local_dt.date()
+    min_local_time = min_local_dt.time()
+    
+    s_date = st.date_input("Start Date", value=max(datetime.now().date(), min_local_date), min_value=min_local_date)
+    e_date = st.date_input("End Date", value=max(datetime.now().date(), min_local_date), min_value=min_local_date)
+
     c1, c2 = st.columns(2)
     s_time = c1.selectbox("Start Time", hours := [f"{h:02d}:00" for h in range(24)], index=19)
     e_time = c2.selectbox("End Time", hours, index=21)
@@ -413,7 +447,13 @@ with st.sidebar:
 
 
             start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
-            end_dt = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
+            end_dt   = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
+            
+            # clamp to MIN_UTC expressed in local time
+            if start_dt < min_local_dt:
+                start_dt = min_local_dt
+                st.warning(f"Start time clamped to minimum: {min_local_dt.strftime('%Y-%m-%d %H:%M')} ({tz_label})")
+
             ro_times = list(pd.date_range(start_dt + timedelta(minutes=15), end_dt, freq="15min"))
             mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1H"))
 
@@ -612,7 +652,7 @@ with st.sidebar:
         ax.bar(df["time"], df["rain_in"], color="#01a0fe", width=0.006, edgecolor="white", linewidth=0.3)
         
         # Highlight current time in the bar chart
-        curr_time = pd.to_datetime(st.session_state.time_list[st.session_state.current_time_index])
+        curr_time = pd.to_datetime(st.session_state.current_time_label)
         ax.axvline(curr_time, color="#ff0101", linestyle="--", alpha=0.8, lw=1)
         
         ax.set_ylabel("Inches", color="gray")
@@ -627,6 +667,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
