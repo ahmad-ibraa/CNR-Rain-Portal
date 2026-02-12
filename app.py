@@ -147,23 +147,7 @@ st.markdown("""
 #deckgl-wrapper, #deckgl-wrapper canvas { pointer-events:auto !important; }
 
 /* floating controls container (JS adds this class) */
-.floating-controls{
-  position: fixed !important;
-  left: 420px !important;
-  right: 18px !important;
-  bottom: 18px !important;
-  z-index: 1000000 !important;
-  background: rgba(15,15,15,0.92) !important;
-  padding: 12px 16px !important;
-  border-radius: 999px !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
-  backdrop-filter: blur(10px);
-  pointer-events: auto !important;
 
-  box-sizing: border-box !important;
-  max-width: calc(100vw - 420px - 18px) !important;
-  overflow: hidden !important;
-}
 
 .floating-controls *{ pointer-events:auto !important; }
 
@@ -285,6 +269,62 @@ st.markdown("""
   margin: 0 !important;
   box-sizing: border-box !important;
 }
+</style>
+""", unsafe_allow_html=True)
+st.markdown("""
+<style>
+
+/* -------- Clean slider layout -------- */
+.floating-controls {
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
+/* Make slider only 75% width and centered */
+.floating-controls [data-testid="stHorizontalBlock"] {
+    width: 75% !important;
+    margin: 0 auto !important;
+}
+
+/* Remove default extra padding */
+.floating-controls [data-testid="stSlider"] {
+    margin: 0 !important;
+}
+
+/* -------- Track styling -------- */
+.floating-controls [data-baseweb="slider"] div[role="progressbar"] {
+    height: 10px !important;                 /* thicker track */
+    border-radius: 4px !important;
+    background: rgba(255,255,255,0.2) !important;
+}
+
+/* Filled portion */
+.floating-controls [data-baseweb="slider"] div[role="progressbar"] > div {
+    height: 10px !important;
+    border-radius: 4px !important;
+    background: #01a0fe !important;
+}
+
+/* -------- Vertical line thumb -------- */
+.floating-controls [data-baseweb="slider"] div[role="slider"] {
+    width: 4px !important;                   /* thin vertical line */
+    height: 28px !important;                 /* tall */
+    border-radius: 2px !important;
+    background: #01a0fe !important;
+    border: none !important;
+    box-shadow: 0 0 10px rgba(1,160,254,0.6) !important;
+    margin-top: -9px !important;             /* vertically center it */
+}
+
+/* Timestamp clean look */
+.floating-controls .timestamp {
+    color: #01a0fe !important;
+    font-family: monospace !important;
+    font-weight: 600 !important;
+    font-size: 14px !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -715,6 +755,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
