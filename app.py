@@ -180,6 +180,7 @@ st.markdown("""
 .floating-controls{
   height: 100px !important;                 /* give it a stable height */
   display: flex !important;
+  justify-content: center !important;   /* horizontal centering */
   align-items: center !important;          /* vertical centering */
 }
 
@@ -300,7 +301,6 @@ st.markdown("""
 /* Make slider only 75% width and centered */
 .floating-controls [data-testid="stHorizontalBlock"] {
     width: 75% !important;
-    margin: 0 auto !important;
 }
 
 /* Remove default extra padding */
@@ -771,6 +771,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
