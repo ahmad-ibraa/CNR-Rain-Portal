@@ -178,10 +178,10 @@ st.markdown("""
 }
 /* ---------- Floating bar: center contents ---------- */
 .floating-controls{
-  height: 100px !important;                 /* give it a stable height */
+  height: 100px !important;                  /* give it a stable height */
   display: flex !important;
   justify-content: center !important;   /* horizontal centering */
-  align-items: center !important;          /* vertical centering */
+  align-items: center !important;           /* vertical centering */
 }
 /* Make the immediate child take full width so centering is consistent */
 .floating-controls > div{
@@ -194,7 +194,7 @@ st.markdown("""
 
 /* Streamlit columns row inside the floating bar */
 .floating-controls [data-testid="stHorizontalBlock"]{
-  align-items: center !important;          /* vertical centering */
+  align-items: center !important;           /* vertical centering */
   gap: 14px !important;
 }
 
@@ -322,14 +322,14 @@ st.markdown("""
 /* -------- Track styling -------- */
 .floating-controls [data-baseweb="slider"] div[role="progressbar"] {
     height: 30px !important;                 /* thicker track */
-    border-radius: 4px !important;
+    border_radius: 4px !important;
     background: rgba(255,255,255,0.2) !important;
 }
 
 /* Filled portion */
 .floating-controls [data-baseweb="slider"] div[role="progressbar"] > div {
     height: 10px !important;
-    border-radius: 4px !important;
+    border_radius: 4px !important;
     background: #01a0fe !important;
 }
 
@@ -337,10 +337,10 @@ st.markdown("""
 .floating-controls [data-baseweb="slider"] div[role="slider"] {
     width: 4px !important;                   /* thin vertical line */
     height: 28px !important;                 /* tall */
-    border-radius: 2px !important;
+    border_radius: 2px !important;
     background: #01a0fe !important;
     border: none !important;
-    box-shadow: 0 0 10px rgba(1,160,254,0.6) !important;
+    box_shadow: 0 0 10px rgba(1,160,254,0.6) !important;
     margin-top: -9px !important;             /* vertically center it */
 }
 
@@ -536,10 +536,29 @@ with st.sidebar:
     c1, c2 = st.columns(2)
     s_time = c1.selectbox("Start Time", hours := [f"{h:02d}:00" for h in range(24)], index=00)
     e_time = c2.selectbox("End Time", hours, index=00)
-    up_zip = st.file_uploader("Watershed Boundary (ZIP)", type="zip")
-    basin_name = up_zip.name.replace(".zip", "") if up_zip else "Default_Basin"
 
-    if up_zip:
+    # --- Municipality Selection ---
+    muni_file = "nj_munis.geojson"
+    selected_muni = None
+    if os.path.exists(muni_file):
+        try:
+            muni_gdf = gpd.read_file(muni_file)
+            muni_names = sorted(muni_gdf["GNIS_NAME"].dropna().unique().tolist())
+            selected_muni = st.selectbox("Select NJ Municipality", ["None"] + muni_names)
+            
+            if selected_muni != "None":
+                st.session_state.active_gdf = muni_gdf[muni_gdf["GNIS_NAME"] == selected_muni].to_crs("EPSG:4326")
+                b = st.session_state.active_gdf.total_bounds
+                st.session_state.map_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12)
+                basin_name = selected_muni.replace(" ", "_")
+        except Exception as e:
+            st.error(f"Error loading {muni_file}: {e}")
+
+    up_zip = st.file_uploader("OR Upload Watershed Boundary (ZIP)", type="zip")
+    if not selected_muni or selected_muni == "None":
+        basin_name = up_zip.name.replace(".zip", "") if up_zip else "Default_Basin"
+
+    if up_zip and (not selected_muni or selected_muni == "None"):
         with tempfile.TemporaryDirectory() as td:
             with zipfile.ZipFile(up_zip, "r") as z: z.extractall(td)
             if shps := list(Path(td).rglob("*.shp")):
@@ -552,7 +571,7 @@ with st.sidebar:
     if st.button("Run Processing", use_container_width=True):
         try:
             if st.session_state.active_gdf is None:
-                st.session_state.processing_msg = "Upload a watershed boundary ZIP first."; st.rerun()
+                st.session_state.processing_msg = "Select a municipality or upload a boundary ZIP first."; st.rerun()
 
             # 1. Setup spatial bounds (CROP TO BASIN)
             b = st.session_state.active_gdf.total_bounds
@@ -647,7 +666,6 @@ with st.sidebar:
             st.session_state.is_playing = False
             st.session_state.current_time_index = 0
             st.session_state.radar_cache = cache
-            st.session_state.time_list = sorted(cache.keys())
             st.session_state.time_list = sorted(cache.keys())
             st.session_state.current_time_label = st.session_state.time_list[0] if st.session_state.time_list else None
             st.session_state.current_time_index = 0
@@ -782,24 +800,3 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
