@@ -300,11 +300,14 @@ st.markdown("""
 <style>
 
 /* -------- Clean slider layout -------- */
-.floating-controls {
-    background: none !important;
-    border: none !important;
-    padding: 0 !important;
+.floating-controls{
+  background: rgba(0,0,0,0.85) !important;   /* darker */
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  padding: 20px 20px !important;            /* keep your height look */
+  border-radius: 999px !important;
+  backdrop-filter: blur(10px);
 }
+
 
 /* Make slider only 75% width and centered */
 .floating-controls [data-testid="stHorizontalBlock"] {
@@ -779,6 +782,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
