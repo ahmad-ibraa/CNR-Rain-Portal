@@ -178,7 +178,7 @@ st.markdown("""
 }
 /* ---------- Floating bar: center contents ---------- */
 .floating-controls{
-  height: 70px !important;                 /* give it a stable height */
+  height: 100px !important;                 /* give it a stable height */
   display: flex !important;
   align-items: center !important;          /* vertical centering */
 }
@@ -310,7 +310,7 @@ st.markdown("""
 
 /* -------- Track styling -------- */
 .floating-controls [data-baseweb="slider"] div[role="progressbar"] {
-    height: 10px !important;                 /* thicker track */
+    height: 30px !important;                 /* thicker track */
     border-radius: 4px !important;
     background: rgba(255,255,255,0.2) !important;
 }
@@ -771,6 +771,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
