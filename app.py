@@ -874,36 +874,6 @@ if st.session_state.time_list:
     </script>
     """, height=0)
 
-# =============================
-# 8) OUTPUTS (STYLIZED BAR CHART)
-# =============================
-with st.sidebar:
-    if st.session_state.basin_vault:
-        st.divider()
-        st.subheader("Rainfall Analysis")
-        
-        df = st.session_state.basin_vault[basin_name]
-        
-        fig, ax = plt.subplots(figsize=(5, 3.5))
-        # Use a calculated width for bars (approx 10 mins in day-units)
-        ax.bar(df["time"], df["rain_in"], color="#01a0fe", width=0.006, edgecolor="white", linewidth=0.3)
-        
-        # Highlight current time in the bar chart
-        curr_time = pd.to_datetime(st.session_state.current_time_label)
-        ax.axvline(curr_time, color="#ff0101", linestyle="--", alpha=0.8, lw=1)
-        
-        ax.set_ylabel("Inches", color="gray")
-        ax.set_facecolor('#0e1117')
-        fig.patch.set_facecolor('#0e1117')
-        ax.tick_params(colors='gray', labelsize=8)
-        
-        for spine in ax.spines.values():
-            spine.set_visible(False)
-            
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-        
-        csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
 
 
 
