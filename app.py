@@ -518,14 +518,14 @@ with st.sidebar:
     st.title("CNR GIS Portal")
     
     # --- 1. INITIALIZE VARIABLES (Fixes the NameError) ---
+    show_muni_map = False
+    muni_file = "nj_munis.geojson"
+    muni_gdf = None
+    
     if "selected_areas" not in st.session_state:
         st.session_state.selected_areas = {}
     
-    muni_file = "nj_munis.geojson"
-    muni_gdf = None
-    show_muni_map = False # Default to False if something goes wrong
-    
-    # Load GeoJSON if it exists
+    # Load GeoJSON early to ensure variables exist
     if os.path.exists(muni_file):
         muni_gdf = gpd.read_file(muni_file).to_crs("EPSG:4326")
 
@@ -551,10 +551,11 @@ with st.sidebar:
     st.divider()
     st.subheader("Area Selection")
 
-    # Define the checkbox HERE so it's always defined
-    show_muni_map = st.checkbox("Show municipalities on map", value=True)
+    # The checkbox is now defined safely outside conditional blocks
+    if muni_gdf is not None:
+        show_muni_map = st.checkbox("Show municipalities on map", value=True)
 
-    # --- 3. SEARCH & ADD LOGIC ---
+    # --- 3. SEARCH & ADD LOGIC (Redone) ---
     if muni_gdf is not None:
         muni_names = sorted(muni_gdf["GNIS_NAME"].dropna().unique().tolist())
         
@@ -562,18 +563,13 @@ with st.sidebar:
         col_search, col_add = st.columns([0.8, 0.2])
 
         with col_search:
-            # Persistent index to handle resets
-            if "picker_index" not in st.session_state:
-                st.session_state.picker_index = 0
-
             drop_selection = st.selectbox(
                 "Search Municipality", 
                 ["Select to zoom..."] + muni_names,
-                index=st.session_state.picker_index,
-                key="muni_picker_widget"
+                key="muni_picker_search"
             )
         
-        # ZOOM: Updates ViewState as soon as you select a name
+        # ZOOM: Updates ViewState immediately when a name is selected
         if drop_selection != "Select to zoom...":
             target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
             b = target.total_bounds
@@ -586,21 +582,141 @@ with st.sidebar:
                 bearing=0
             )
             
-            # Check if we need to update to avoid infinite loops
+            # Check to prevent infinite rerun loops
             if st.session_state.map_view.latitude != new_view.latitude:
                 st.session_state.map_view = new_view
                 st.rerun()
 
         with col_add:
-            st.write("##") # Visual spacing to align with selectbox
+            st.write("##") # Alignment spacing
             if st.button("➕", help="Add to Active Selections"):
                 if drop_selection != "Select to zoom...":
                     # ADD: Only adds to list when button is clicked
                     st.session_state.selected_areas[drop_selection] = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
-                    st.session_state.picker_index = 0 # Reset dropdown
                     st.rerun()
                 else:
                     st.toast("Select a name first!", icon="⚠️")
+
+    # --- 4. UPLOAD LOGIC ---
+    up_zip = st.file_uploader("Add Watershed Boundary (ZIP)", type="zip")
+    if up_zip:
+        if up_zip.name not in st.session_state.selected_areas:
+            with tempfile.TemporaryDirectory() as td:
+                with zipfile.ZipFile(up_zip, "r") as z: z.extractall(td)
+                if shps := list(Path(td).rglob("*.shp")):
+                    new_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
+                    st.session_state.selected_areas[up_zip.name] = new_gdf
+                    
+                    b = new_gdf.total_bounds
+                    st.session_state.map_view = pdk.ViewState(
+                        latitude=(b[1]+b[3])/2, 
+                        longitude=(b[0]+b[2])/2, 
+                        zoom=12
+                    )
+                    st.rerun()
+
+    # --- 5. ACTIVE SELECTIONS LIST ---
+    if st.session_state.selected_areas:
+        st.write("---")
+        st.caption("Active Selections:")
+        for name in list(st.session_state.selected_areas.keys()):
+            cols = st.columns([0.8, 0.2])
+            cols[0].markdown(f"📍 **{name}**")
+            if cols[1].button("✕", key=f"del_{name}"):
+                del st.session_state.selected_areas[name]
+                st.rerun()
+
+    # --- 6. PROCESSING ENGINE ---
+    if st.button("Run Processing", use_container_width=True):
+        if not st.session_state.selected_areas:
+            st.error("Select at least one area first.")
+        else:
+            try:
+                st.session_state.active_gdf = pd.concat(st.session_state.selected_areas.values())
+                b = st.session_state.active_gdf.total_bounds
+                BUFFER_DEG = 0.35
+                lon_min, lat_min, lon_max, lat_max = b[0]-BUFFER_DEG, b[1]-BUFFER_DEG, b[2]+BUFFER_DEG, b[3]+BUFFER_DEG
+                
+                start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
+                end_dt   = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
+                if start_dt < min_local_dt: start_dt = min_local_dt
+
+                ro_times = list(pd.date_range(start_dt + timedelta(minutes=15), end_dt, freq="15min"))
+                mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1H"))
+
+                pb, msg = st.progress(0.0), st.empty()
+                ro_list, ro_kept = [], []
+                for i, t in enumerate(ro_times):
+                    msg.info(f"RO → {i+1}/{len(ro_times)}")
+                    da = load_precip("RO", t.to_pydatetime())
+                    if da is not None:
+                        da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
+                        ro_list.append(da.astype("float32"))
+                        ro_kept.append(t.to_pydatetime())
+                
+                if len(ro_list) < 4: raise RuntimeError("Insufficient RO data.")
+                ro = xr.concat(ro_list, dim="time").assign_coords(time=ro_kept)
+                del ro_list; gc.collect()
+
+                mrms_list, mrms_kept = [], []
+                for j, t in enumerate(mrms_times):
+                    msg.info(f"MRMS → {j+1}/{len(mrms_times)}")
+                    da = load_precip("MRMS", t.to_pydatetime())
+                    if da is not None:
+                        da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
+                        mrms_list.append(da.astype("float32"))
+                        mrms_kept.append(t.to_pydatetime())
+                
+                if not mrms_list: raise RuntimeError("No MRMS data found.")
+                mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
+                del mrms_list; gc.collect()
+                
+                msg.info("Aligning grids...")
+                ro = align_ro_to_mrms_grid_nearest(ro, mrms.isel(time=0))
+                gc.collect()
+
+                msg.info("Calculating Bias Scaling...")
+                ro_hourly, v_times = [], []
+                for T in mrms.time.values:
+                    Tdt = pd.to_datetime(str(T)).to_pydatetime()
+                    block = ro.sel(time=slice(Tdt - timedelta(minutes=45) - timedelta(seconds=1), Tdt))
+                    if block.sizes.get("time", 0) == 4:
+                        ro_hourly.append(block.sum(dim="time").astype("float32"))
+                        v_times.append(Tdt)
+                
+                if not v_times: raise RuntimeError("No matching RO/MRMS windows found.")
+                
+                mrms_subset = mrms.sel(time=pd.to_datetime(v_times))
+                ro_hr_da = xr.concat(ro_hourly, dim="time").assign_coords(time=pd.to_datetime(v_times))
+                scaling = xr.where(ro_hr_da > 0.01, mrms_subset / ro_hr_da, 0.0).clip(0, 50).astype("float32")
+                del ro_hr_da, ro_hourly, mrms_subset; gc.collect()
+
+                msg.info("Rendering frames...")
+                cache, stats = {}, []
+                m_ends = [pd.to_datetime(str(x)).to_pydatetime() for x in mrms.time.values]
+                
+                for t in ro.time.values:
+                    tdt = pd.to_datetime(str(t)).to_pydatetime()
+                    h_end = next((T for T in m_ends if T >= tdt), None)
+                    if h_end and tdt >= h_end - timedelta(minutes=45):
+                        h_idx = m_ends.index(h_end)
+                        s_frame = (drop_time_coord(ro.sel(time=tdt)) * drop_time_coord(scaling.isel(time=h_idx))).astype("float32")
+                        img, bnds = save_frame_png(s_frame, tdt)
+                        lbl = tdt.strftime("%Y-%m-%d %H:%M")
+                        cache[lbl] = {"path": img, "bounds": bnds}
+                        stats.append({"time": tdt, "rain_in": watershed_mean_inch(s_frame, st.session_state.active_gdf)})
+
+                st.session_state.radar_cache = cache
+                st.session_state.time_list = sorted(cache.keys())
+                st.session_state.current_time_label = st.session_state.time_list[0] if st.session_state.time_list else None
+                
+                # Dynamic basin naming for the export
+                basin_name = list(st.session_state.selected_areas.keys())[0].replace(" ", "_")
+                st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
+                msg.success("Complete."); st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}"); st.stop()
+
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
 # =============================
@@ -613,7 +729,7 @@ if st.session_state.is_playing:
 
 layers = []
 
-# Layer 1: Municipalities
+# Layer 1: Municipalities (Fixed NameError check)
 if show_muni_map and muni_gdf is not None:
     layers.append(pdk.Layer(
         "GeoJsonLayer",
@@ -657,7 +773,6 @@ deck = pdk.Deck(
     tooltip={"text": "{GNIS_NAME}"} if show_muni_map else None
 )
 
-# FIX: Unique key includes the area names to force map refresh on selection
 selection_hash = "_".join(st.session_state.selected_areas.keys())
 deck_key = f"map_{st.session_state.current_time_label}_{selection_hash}"
 map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
@@ -671,7 +786,6 @@ if map_event and map_event.get("last_clicked"):
             target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
             st.session_state.selected_areas[name] = target
             
-            # Update ViewState for Zoom on Click
             b = target.total_bounds
             st.session_state.map_view = pdk.ViewState(
                 latitude=(b[1]+b[3])/2, 
@@ -679,7 +793,6 @@ if map_event and map_event.get("last_clicked"):
                 zoom=12
             )
             st.rerun()
-            
 # =============================
 # 7) FLOATING CONTROLS
 # =============================
@@ -757,6 +870,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
