@@ -736,11 +736,11 @@ with st.sidebar:
                 else:
                     width = 0.01  # Fallback width if only one point exists
     
-                fig, ax = plt.subplots(figsize=(4, 2))
+                fig, ax = plt.subplots(figsize=(12, 8))
                 
                 # 2. Plot with correct width and 'edge' alignment 
                 # align='edge' starts the bar exactly at the timestamp, preventing overlap
-                ax.bar(df['time'], df['rain_in'], color='#01a0fe', width=width, align='edge')
+                ax.bar(df['time'], df['rain_in'], color='#01a0fe', width=width, align='edge', edgecolor='white', linewidth=0.5)
                 
                 # 3. Force the x-axis to respect your actual data range (trims empty space)
                 ax.set_xlim(df['time'].min(), df['time'].max() + timedelta(seconds=delta_seconds))
@@ -900,6 +900,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
