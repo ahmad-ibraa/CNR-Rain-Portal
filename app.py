@@ -239,6 +239,54 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+/* --- Fix BaseWeb slider geometry inside floating-controls --- */
+
+/* 1) Remove Streamlit's extra padding around the widget block */
+.floating-controls [data-testid="stSelectSlider"],
+.floating-controls [data-testid="stSlider"]{
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* 2) Force the widget container to not “overhang” */
+.floating-controls [data-testid="stSelectSlider"] > div,
+.floating-controls [data-testid="stSlider"] > div{
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+/* 3) BaseWeb slider root: remove left/right padding that makes thumb start “too far left” */
+.floating-controls [data-baseweb="slider"]{
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  margin: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* 4) The rail/track wrapper sometimes has negative margin or extra width */
+.floating-controls [data-baseweb="slider"] > div{
+  margin: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* 5) Progressbar (track) should not extend past the container */
+.floating-controls [data-baseweb="slider"] div[role="progressbar"]{
+  width: 100% !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* 6) Some builds render the filled bar as a child with its own margin */
+.floating-controls [data-baseweb="slider"] div[role="progressbar"] > div{
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 
@@ -667,6 +715,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
