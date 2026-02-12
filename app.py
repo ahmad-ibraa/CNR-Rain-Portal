@@ -91,6 +91,7 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
   border-radius:10px !important;
   height:44px !important;
   font-weight:650 !important;
+  background: rgba(226,36,44,0.92) !important;
 }
 
 /* --- 3. MAP OVERLAY --- */
@@ -560,7 +561,7 @@ with st.sidebar:
         with col_search:
             drop_selection = st.selectbox(
                 "Search Municipality", 
-                ["Select to zoom..."] + muni_names,
+                ["Type to start..."] + muni_names,
                 key="muni_picker_search"
             )
         
@@ -570,13 +571,10 @@ with st.sidebar:
             b = target.total_bounds
             new_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12, pitch=0, bearing=0)
             
-            if st.session_state.map_view.latitude != new_view.latitude:
-                st.session_state.map_view = new_view
-                st.rerun()
 
         with col_add:
             st.write("##")
-            if st.button("➕", help="Add to Active Selections"):
+            if st.button("+", help="Add to Active Selections"):
                 if drop_selection != "Select to zoom...":
                     st.session_state.selected_areas[drop_selection] = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
                     st.rerun()
@@ -873,6 +871,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
