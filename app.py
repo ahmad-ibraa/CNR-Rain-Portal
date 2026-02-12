@@ -19,7 +19,7 @@ import rioxarray
 import time
 import base64
 from zoneinfo import ZoneInfo
-
+import matplotlib.dates as mdates
 UTC_TZ = ZoneInfo("UTC")
 
 # user-selectable timezones (add/remove as you like)
@@ -726,14 +726,43 @@ with st.sidebar:
             with st.expander(f"📊 {name}", expanded=False):
                 # Download Link
                 csv_download_link(df, f"{name}_rain_data.csv", f"Download CSV")
+
+                # 1. Calculate the correct bar width (Matplotlib uses 'days' as the unit)
+                if len(df) > 1:
+                    # Get time difference between first two points in seconds
+                    delta_seconds = (df['time'].iloc[1] - df['time'].iloc[0]).total_seconds()
+                    # Convert to days (seconds / 86400)
+                    width = delta_seconds / 86400
+                else:
+                    width = 0.01  # Fallback width if only one point exists
+    
+                fig, ax = plt.subplots(figsize=(4, 2))
                 
-                # Mini Plot
-                fig, ax = plt.subplots(figsize=(12, 8))
-                ax.bar(df['time'], df['rain_in'], color='#01a0fe')
+                # 2. Plot with correct width and 'edge' alignment 
+                # align='edge' starts the bar exactly at the timestamp, preventing overlap
+                ax.bar(df['time'], df['rain_in'], color='#01a0fe', width=width, align='edge')
+                
+                # 3. Force the x-axis to respect your actual data range (trims empty space)
+                ax.set_xlim(df['time'].min(), df['time'].max() + timedelta(seconds=delta_seconds))
+    
+                # 4. Dynamic X-Axis Labels (Prevents text overlap)
+                locator = mdates.AutoDateLocator(minticks=3, maxticks=5)
+                formatter = mdates.ConciseDateFormatter(locator)
+                ax.xaxis.set_major_locator(locator)
+                ax.xaxis.set_major_formatter(formatter)
+    
+                # 5. Styling
                 ax.set_title(f"{name} Rainfall (in)", color='white', fontsize=8)
                 ax.tick_params(axis='both', colors='white', labelsize=6)
                 ax.set_facecolor('#111')
                 fig.patch.set_facecolor('#111')
+                
+                # Clean up borders (spines)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.spines['bottom'].set_color('white')
+                ax.spines['left'].set_color('white')
+    
                 st.pyplot(fig)
                 plt.close(fig)
 
@@ -871,6 +900,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
