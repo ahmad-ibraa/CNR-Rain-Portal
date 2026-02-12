@@ -512,26 +512,57 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
     except: return float(da_full.mean().values) / 25.4
 
 # =============================
-    # 5) SIDEBAR UI (UPDATED)
-    # =============================
+# 5) SIDEBAR UI
+# =============================
+with st.sidebar:
+    st.title("CNR GIS Portal")
+    
+    # --- 1. INITIALIZE VARIABLES (Fixes the NameError) ---
+    if "selected_areas" not in st.session_state:
+        st.session_state.selected_areas = {}
+    
+    muni_file = "nj_munis.geojson"
+    muni_gdf = None
+    show_muni_map = False # Default to False if something goes wrong
+    
+    # Load GeoJSON if it exists
+    if os.path.exists(muni_file):
+        muni_gdf = gpd.read_file(muni_file).to_crs("EPSG:4326")
+
+    # --- 2. TIMEZONE & DATE PICKERS ---
+    tz_label = st.selectbox(
+        "Time Zone",
+        list(TZ_OPTIONS.keys()),
+        index=list(TZ_OPTIONS.values()).index(st.session_state.tz_name)
+              if st.session_state.tz_name in TZ_OPTIONS.values()
+              else 1
+    )
+    st.session_state.tz_name = TZ_OPTIONS[tz_label]
+    LOCAL_TZ = ZoneInfo(st.session_state.tz_name)
+
+    min_local_dt = utc_naive_to_local_naive(MIN_UTC)
+    s_date = st.date_input("Start Date", value=max(datetime.now().date(), min_local_dt.date()), min_value=min_local_dt.date())
+    e_date = st.date_input("End Date", value=max(datetime.now().date(), min_local_dt.date()), min_value=min_local_dt.date())
+
+    c1, c2 = st.columns(2)
+    s_time = c1.selectbox("Start Time", hours := [f"{h:02d}:00" for h in range(24)], index=0)
+    e_time = c2.selectbox("End Time", hours, index=0)
+
     st.divider()
     st.subheader("Area Selection")
 
-    muni_file = "nj_munis.geojson"
-    muni_gdf = None
-    if os.path.exists(muni_file):
-        muni_gdf = gpd.read_file(muni_file).to_crs("EPSG:4326")
-        
+    # Define the checkbox HERE so it's always defined
     show_muni_map = st.checkbox("Show municipalities on map", value=True)
 
+    # --- 3. SEARCH & ADD LOGIC ---
     if muni_gdf is not None:
         muni_names = sorted(muni_gdf["GNIS_NAME"].dropna().unique().tolist())
         
-        # Use columns to put the search and the "+" button side-by-side
+        # Columns for Search Box + Add Button
         col_search, col_add = st.columns([0.8, 0.2])
 
         with col_search:
-            # We use an index-based reset strategy to avoid the SessionState exception
+            # Persistent index to handle resets
             if "picker_index" not in st.session_state:
                 st.session_state.picker_index = 0
 
@@ -542,12 +573,11 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
                 key="muni_picker_widget"
             )
         
-        # 1. ZOOM LOGIC: If a municipality is selected, zoom the map
+        # ZOOM: Updates ViewState as soon as you select a name
         if drop_selection != "Select to zoom...":
             target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
             b = target.total_bounds
             
-            # Update map view state without adding to the list yet
             new_view = pdk.ViewState(
                 latitude=(b[1]+b[3])/2, 
                 longitude=(b[0]+b[2])/2, 
@@ -556,45 +586,21 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
                 bearing=0
             )
             
-            # Only rerun/update if the view is actually different
+            # Check if we need to update to avoid infinite loops
             if st.session_state.map_view.latitude != new_view.latitude:
                 st.session_state.map_view = new_view
                 st.rerun()
 
         with col_add:
-            st.write("##") # Alignment spacer
+            st.write("##") # Visual spacing to align with selectbox
             if st.button("➕", help="Add to Active Selections"):
                 if drop_selection != "Select to zoom...":
-                    # 2. ADD LOGIC: Only add to the list when button is clicked
-                    if drop_selection not in st.session_state.selected_areas:
-                        target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
-                        st.session_state.selected_areas[drop_selection] = target
-                        
-                    # Reset the picker to "Select to zoom..."
-                    # We don't modify st.session_state.muni_picker_widget directly.
-                    # Instead, we toggle a key or just let it reset on the next loop.
-                    st.session_state.picker_index = 0 
+                    # ADD: Only adds to list when button is clicked
+                    st.session_state.selected_areas[drop_selection] = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
+                    st.session_state.picker_index = 0 # Reset dropdown
                     st.rerun()
                 else:
-                    st.warning("Select a name first")
-
-    # --- Upload logic remains the same ---
-    up_zip = st.file_uploader("Add Watershed Boundary (ZIP)", type="zip")
-    if up_zip:
-        if up_zip.name not in st.session_state.selected_areas:
-            with tempfile.TemporaryDirectory() as td:
-                with zipfile.ZipFile(up_zip, "r") as z: z.extractall(td)
-                if shps := list(Path(td).rglob("*.shp")):
-                    new_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
-                    st.session_state.selected_areas[up_zip.name] = new_gdf
-                    
-                    b = new_gdf.total_bounds
-                    st.session_state.map_view = pdk.ViewState(
-                        latitude=(b[1]+b[3])/2, 
-                        longitude=(b[0]+b[2])/2, 
-                        zoom=12
-                    )
-                    st.rerun()
+                    st.toast("Select a name first!", icon="⚠️")
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
 # =============================
@@ -751,6 +757,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
