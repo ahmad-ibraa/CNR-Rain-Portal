@@ -778,21 +778,32 @@ deck_key = f"map_{st.session_state.current_time_label}_{selection_hash}"
 map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
 
 # 7. INTERACTIVITY: Catch Map Clicks
-if map_event and map_event.get("last_clicked"):
-    picked_obj = map_event["last_clicked"].get("object")
-    if picked_obj and "GNIS_NAME" in picked_obj:
-        name = picked_obj["GNIS_NAME"]
-        if name not in st.session_state.selected_areas:
-            target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
-            st.session_state.selected_areas[name] = target
-            
-            b = target.total_bounds
-            st.session_state.map_view = pdk.ViewState(
-                latitude=(b[1]+b[3])/2, 
-                longitude=(b[0]+b[2])/2, 
-                zoom=12
-            )
-            st.rerun()
+# Convert the event to a dict or use selection logic compatible with Streamlit
+if map_event is not None:
+    # Safely check for 'last_clicked' without using .get()
+    try:
+        last_clicked = map_event["last_clicked"]
+        if last_clicked:
+            picked_obj = last_clicked.get("object")
+            if picked_obj and "GNIS_NAME" in picked_obj:
+                name = picked_obj["GNIS_NAME"]
+                if name not in st.session_state.selected_areas:
+                    target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
+                    st.session_state.selected_areas[name] = target
+                    
+                    # Update ViewState for Zoom on Click
+                    b = target.total_bounds
+                    st.session_state.map_view = pdk.ViewState(
+                        latitude=(b[1]+b[3])/2, 
+                        longitude=(b[0]+b[2])/2, 
+                        zoom=12,
+                        pitch=0,
+                        bearing=0
+                    )
+                    st.rerun()
+    except (KeyError, TypeError):
+        # This handles cases where map_event exists but doesn't have the key yet
+        pass
 # =============================
 # 7) FLOATING CONTROLS
 # =============================
@@ -870,6 +881,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
