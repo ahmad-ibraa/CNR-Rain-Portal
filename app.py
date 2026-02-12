@@ -517,7 +517,7 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
 with st.sidebar:
     st.title("CNR GIS Portal")
     
-    # --- 1. INITIALIZE VARIABLES (Fixes the NameError) ---
+    # --- 1. INITIALIZE VARIABLES ---
     show_muni_map = False
     muni_file = "nj_munis.geojson"
     muni_gdf = None
@@ -525,7 +525,6 @@ with st.sidebar:
     if "selected_areas" not in st.session_state:
         st.session_state.selected_areas = {}
     
-    # Load GeoJSON early to ensure variables exist
     if os.path.exists(muni_file):
         muni_gdf = gpd.read_file(muni_file).to_crs("EPSG:4326")
 
@@ -533,9 +532,7 @@ with st.sidebar:
     tz_label = st.selectbox(
         "Time Zone",
         list(TZ_OPTIONS.keys()),
-        index=list(TZ_OPTIONS.values()).index(st.session_state.tz_name)
-              if st.session_state.tz_name in TZ_OPTIONS.values()
-              else 1
+        index=list(TZ_OPTIONS.values()).index(st.session_state.tz_name) if st.session_state.tz_name in TZ_OPTIONS.values() else 1
     )
     st.session_state.tz_name = TZ_OPTIONS[tz_label]
     LOCAL_TZ = ZoneInfo(st.session_state.tz_name)
@@ -551,15 +548,13 @@ with st.sidebar:
     st.divider()
     st.subheader("Area Selection")
 
-    # The checkbox is now defined safely outside conditional blocks
+    # [CHANGE]: Default value set to False for performance
     if muni_gdf is not None:
-        show_muni_map = st.checkbox("Show municipalities on map", value=True)
+        show_muni_map = st.checkbox("Show municipalities on map", value=False)
 
-    # --- 3. SEARCH & ADD LOGIC (Redone) ---
+    # --- 3. SEARCH & ADD LOGIC ---
     if muni_gdf is not None:
         muni_names = sorted(muni_gdf["GNIS_NAME"].dropna().unique().tolist())
-        
-        # Columns for Search Box + Add Button
         col_search, col_add = st.columns([0.8, 0.2])
 
         with col_search:
@@ -569,29 +564,20 @@ with st.sidebar:
                 key="muni_picker_search"
             )
         
-        # ZOOM: Updates ViewState immediately when a name is selected
+        # ZOOM Logic
         if drop_selection != "Select to zoom...":
             target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
             b = target.total_bounds
+            new_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12, pitch=0, bearing=0)
             
-            new_view = pdk.ViewState(
-                latitude=(b[1]+b[3])/2, 
-                longitude=(b[0]+b[2])/2, 
-                zoom=12,
-                pitch=0,
-                bearing=0
-            )
-            
-            # Check to prevent infinite rerun loops
             if st.session_state.map_view.latitude != new_view.latitude:
                 st.session_state.map_view = new_view
                 st.rerun()
 
         with col_add:
-            st.write("##") # Alignment spacing
+            st.write("##")
             if st.button("➕", help="Add to Active Selections"):
                 if drop_selection != "Select to zoom...":
-                    # ADD: Only adds to list when button is clicked
                     st.session_state.selected_areas[drop_selection] = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
                     st.rerun()
                 else:
@@ -608,11 +594,7 @@ with st.sidebar:
                     st.session_state.selected_areas[up_zip.name] = new_gdf
                     
                     b = new_gdf.total_bounds
-                    st.session_state.map_view = pdk.ViewState(
-                        latitude=(b[1]+b[3])/2, 
-                        longitude=(b[0]+b[2])/2, 
-                        zoom=12
-                    )
+                    st.session_state.map_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12)
                     st.rerun()
 
     # --- 5. ACTIVE SELECTIONS LIST ---
@@ -626,14 +608,17 @@ with st.sidebar:
                 del st.session_state.selected_areas[name]
                 st.rerun()
 
-    # --- 6. PROCESSING ENGINE ---
+    # --- 6. PROCESSING ENGINE (UPDATED) ---
     if st.button("Run Processing", use_container_width=True):
         if not st.session_state.selected_areas:
             st.error("Select at least one area first.")
         else:
             try:
-                st.session_state.active_gdf = pd.concat(st.session_state.selected_areas.values())
-                b = st.session_state.active_gdf.total_bounds
+                # 1. Combine all areas to determine the TOTAL bounding box for data fetching
+                combined_gdf = pd.concat(st.session_state.selected_areas.values())
+                b = combined_gdf.total_bounds
+                
+                # Expand bounds slightly to ensure full coverage
                 BUFFER_DEG = 0.35
                 lon_min, lat_min, lon_max, lat_max = b[0]-BUFFER_DEG, b[1]-BUFFER_DEG, b[2]+BUFFER_DEG, b[3]+BUFFER_DEG
                 
@@ -645,6 +630,8 @@ with st.sidebar:
                 mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1H"))
 
                 pb, msg = st.progress(0.0), st.empty()
+                
+                # --- FETCH RO ---
                 ro_list, ro_kept = [], []
                 for i, t in enumerate(ro_times):
                     msg.info(f"RO → {i+1}/{len(ro_times)}")
@@ -658,6 +645,7 @@ with st.sidebar:
                 ro = xr.concat(ro_list, dim="time").assign_coords(time=ro_kept)
                 del ro_list; gc.collect()
 
+                # --- FETCH MRMS ---
                 mrms_list, mrms_kept = [], []
                 for j, t in enumerate(mrms_times):
                     msg.info(f"MRMS → {j+1}/{len(mrms_times)}")
@@ -691,50 +679,65 @@ with st.sidebar:
                 scaling = xr.where(ro_hr_da > 0.01, mrms_subset / ro_hr_da, 0.0).clip(0, 50).astype("float32")
                 del ro_hr_da, ro_hourly, mrms_subset; gc.collect()
 
-                msg.info("Rendering frames...")
-                cache, stats = {}, []
+                msg.info("Rendering frames & Calculating Stats...")
+                
+                # [CHANGE] Prepare structure to hold stats for EACH city separately
+                city_stats_container = {name: [] for name in st.session_state.selected_areas.keys()}
+                cache = {}
+                
                 m_ends = [pd.to_datetime(str(x)).to_pydatetime() for x in mrms.time.values]
                 
                 for t in ro.time.values:
                     tdt = pd.to_datetime(str(t)).to_pydatetime()
                     h_end = next((T for T in m_ends if T >= tdt), None)
+                    
                     if h_end and tdt >= h_end - timedelta(minutes=45):
                         h_idx = m_ends.index(h_end)
+                        # Create the visual frame (covers entire area)
                         s_frame = (drop_time_coord(ro.sel(time=tdt)) * drop_time_coord(scaling.isel(time=h_idx))).astype("float32")
+                        
+                        # Save visual for map
                         img, bnds = save_frame_png(s_frame, tdt)
                         lbl = tdt.strftime("%Y-%m-%d %H:%M")
                         cache[lbl] = {"path": img, "bounds": bnds}
-                        stats.append({"time": tdt, "rain_in": watershed_mean_inch(s_frame, st.session_state.active_gdf)})
+                        
+                        # [CHANGE] Loop through EVERY selected city to calculate its specific rainfall
+                        for area_name, area_gdf in st.session_state.selected_areas.items():
+                            val = watershed_mean_inch(s_frame, area_gdf)
+                            city_stats_container[area_name].append({"time": tdt, "rain_in": val})
 
+                # Update Global State
                 st.session_state.radar_cache = cache
                 st.session_state.time_list = sorted(cache.keys())
                 st.session_state.current_time_label = st.session_state.time_list[0] if st.session_state.time_list else None
                 
-                # Dynamic basin naming for the export
-                basin_name = list(st.session_state.selected_areas.keys())[0].replace(" ", "_")
-                st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
+                # [CHANGE] Save DataFrame for every city into the vault
+                st.session_state.basin_vault = {name: pd.DataFrame(stats) for name, stats in city_stats_container.items()}
+                
                 msg.success("Complete."); st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}"); st.stop()
-    # --- 7. DOWNLOADS & PLOTS (Add this inside the sidebar block) ---
+
+    # --- 7. DOWNLOADS & PLOTS (UPDATED to loop all results) ---
     if st.session_state.basin_vault:
         st.divider()
         st.subheader("Results & Exports")
         
+        # [CHANGE] Loop through basin_vault items to display multiple graphs/downloads
         for name, df in st.session_state.basin_vault.items():
-            st.write(f"📊 **{name}**")
-            
-            # Download Link
-            csv_download_link(df, f"{name}_rain_data.csv", f"Download {name} CSV")
-            
-            # Mini Plot in Sidebar
-            fig, ax = plt.subplots(figsize=(4, 2))
-            ax.plot(df['time'], df['rain_in'], color='#01a0fe')
-            ax.set_title("Rainfall (in)", color='white', fontsize=8)
-            ax.tick_params(axis='both', colors='white', labelsize=6)
-            ax.set_facecolor('#111')
-            fig.patch.set_facecolor('#111')
-            st.pyplot(fig)
+            with st.expander(f"📊 {name}", expanded=False):
+                # Download Link
+                csv_download_link(df, f"{name}_rain_data.csv", f"Download CSV")
+                
+                # Mini Plot
+                fig, ax = plt.subplots(figsize=(4, 2))
+                ax.plot(df['time'], df['rain_in'], color='#01a0fe')
+                ax.set_title(f"{name} Rainfall (in)", color='white', fontsize=8)
+                ax.tick_params(axis='both', colors='white', labelsize=6)
+                ax.set_facecolor('#111')
+                fig.patch.set_facecolor('#111')
+                st.pyplot(fig)
+                plt.close(fig)
 
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
@@ -748,7 +751,7 @@ if st.session_state.is_playing:
 
 layers = []
 
-# Layer 1: Municipalities (Fixed NameError check)
+# Layer 1: Municipalities
 if show_muni_map and muni_gdf is not None:
     layers.append(pdk.Layer(
         "GeoJsonLayer",
@@ -763,8 +766,10 @@ if show_muni_map and muni_gdf is not None:
 
 # Layer 2: Radar
 if st.session_state.time_list and st.session_state.current_time_label:
+    # Validate timestamp exists in current list
     if st.session_state.current_time_label not in st.session_state.time_list:
         st.session_state.current_time_label = st.session_state.time_list[0]
+        
     curr = st.session_state.radar_cache[st.session_state.current_time_label]
     layers.append(pdk.Layer(
         "BitmapLayer",
@@ -773,8 +778,9 @@ if st.session_state.time_list and st.session_state.current_time_label:
         opacity=0.70
     ))
 
-# Layer 3: Selected Highlights
+# Layer 3: Selected Highlights (Blue outlines)
 if st.session_state.selected_areas:
+    # We overlay ALL selected areas
     active_overlay = pd.concat(st.session_state.selected_areas.values())
     layers.append(pdk.Layer(
         "GeoJsonLayer",
@@ -797,20 +803,19 @@ deck_key = f"map_{st.session_state.current_time_label}_{selection_hash}"
 map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
 
 # 7. INTERACTIVITY: Catch Map Clicks
-# Convert the event to a dict or use selection logic compatible with Streamlit
 if map_event is not None:
-    # Safely check for 'last_clicked' without using .get()
     try:
         last_clicked = map_event["last_clicked"]
         if last_clicked:
             picked_obj = last_clicked.get("object")
             if picked_obj and "GNIS_NAME" in picked_obj:
                 name = picked_obj["GNIS_NAME"]
+                # Add to selection if not present
                 if name not in st.session_state.selected_areas:
                     target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
                     st.session_state.selected_areas[name] = target
                     
-                    # Update ViewState for Zoom on Click
+                    # Update ViewState
                     b = target.total_bounds
                     st.session_state.map_view = pdk.ViewState(
                         latitude=(b[1]+b[3])/2, 
@@ -821,7 +826,6 @@ if map_event is not None:
                     )
                     st.rerun()
     except (KeyError, TypeError):
-        # This handles cases where map_event exists but doesn't have the key yet
         pass
 # =============================
 # 7) FLOATING CONTROLS
@@ -900,6 +904,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
