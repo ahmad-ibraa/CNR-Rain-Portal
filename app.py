@@ -154,7 +154,7 @@ st.markdown("""
   bottom: 18px !important;
   z-index: 1000000 !important;
   background: rgba(15,15,15,0.92) !important;
-  padding: 20px 20px !important;
+  padding: 50px 20px !important;
   border-radius: 999px !important;
   border: 1px solid rgba(255,255,255,0.12) !important;
   backdrop-filter: blur(10px);
@@ -771,6 +771,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
