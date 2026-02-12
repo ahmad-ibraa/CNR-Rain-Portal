@@ -728,8 +728,8 @@ with st.sidebar:
                 csv_download_link(df, f"{name}_rain_data.csv", f"Download CSV")
                 
                 # Mini Plot
-                fig, ax = plt.subplots(figsize=(4, 2))
-                ax.plot(df['time'], df['rain_in'], color='#01a0fe')
+                fig, ax = plt.subplots(figsize=(12, 8))
+                ax.bar(df['time'], df['rain_in'], color='#01a0fe')
                 ax.set_title(f"{name} Rainfall (in)", color='white', fontsize=8)
                 ax.tick_params(axis='both', colors='white', labelsize=6)
                 ax.set_facecolor('#111')
@@ -871,6 +871,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
