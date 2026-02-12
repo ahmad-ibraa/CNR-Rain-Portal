@@ -183,6 +183,14 @@ st.markdown("""
   justify-content: center !important;   /* horizontal centering */
   align-items: center !important;          /* vertical centering */
 }
+/* Make the immediate child take full width so centering is consistent */
+.floating-controls > div{
+  width: 100% !important;
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+}
+
 
 /* Streamlit columns row inside the floating bar */
 .floating-controls [data-testid="stHorizontalBlock"]{
@@ -771,6 +779,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
