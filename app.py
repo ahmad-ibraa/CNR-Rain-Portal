@@ -716,6 +716,25 @@ with st.sidebar:
                 msg.success("Complete."); st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}"); st.stop()
+    # --- 7. DOWNLOADS & PLOTS (Add this inside the sidebar block) ---
+    if st.session_state.basin_vault:
+        st.divider()
+        st.subheader("Results & Exports")
+        
+        for name, df in st.session_state.basin_vault.items():
+            st.write(f"📊 **{name}**")
+            
+            # Download Link
+            csv_download_link(df, f"{name}_rain_data.csv", f"Download {name} CSV")
+            
+            # Mini Plot in Sidebar
+            fig, ax = plt.subplots(figsize=(4, 2))
+            ax.plot(df['time'], df['rain_in'], color='#01a0fe')
+            ax.set_title("Rainfall (in)", color='white', fontsize=8)
+            ax.tick_params(axis='both', colors='white', labelsize=6)
+            ax.set_facecolor('#111')
+            fig.patch.set_facecolor('#111')
+            st.pyplot(fig)
 
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
@@ -881,6 +900,7 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
 
 
