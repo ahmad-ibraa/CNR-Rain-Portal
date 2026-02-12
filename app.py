@@ -574,7 +574,7 @@ with st.sidebar:
 
         with col_add:
             st.write("##")
-            if st.button("➕", help="Add to Active Selections"):
+            if st.button("✚", help="Add to Active Selections"):
                 if drop_selection != "Select to zoom...":
                     st.session_state.selected_areas[drop_selection] = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
                     st.rerun()
@@ -871,6 +871,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
