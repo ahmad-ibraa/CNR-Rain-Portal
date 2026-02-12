@@ -514,15 +514,12 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
 # =============================
 # 5) SIDEBAR UI
 # =============================
-# =============================
-# 5) SIDEBAR UI
-# =============================
 with st.sidebar:
     st.title("CNR GIS Portal")
     
-    # 1. Initialize selection state
+    # Initialize selection state
     if "selected_areas" not in st.session_state:
-        st.session_state.selected_areas = {} # { "Name": GeoDataFrame }
+        st.session_state.selected_areas = {}
 
     tz_label = st.selectbox(
         "Time Zone",
@@ -545,7 +542,6 @@ with st.sidebar:
     st.divider()
     st.subheader("Area Selection")
 
-    # 2. Municipality Reference Data
     muni_file = "nj_munis.geojson"
     muni_gdf = None
     if os.path.exists(muni_file):
@@ -553,33 +549,60 @@ with st.sidebar:
         
     show_muni_map = st.checkbox("Show municipalities on map", value=True)
 
-    # 3. Add via Dropdown
+    # --- FIX: Dropdown with Reset Logic ---
     if muni_gdf is not None:
         muni_names = sorted(muni_gdf["GNIS_NAME"].dropna().unique().tolist())
-        drop_selection = st.selectbox("Search & Add Municipality", ["Select to add..."] + muni_names)
+        
+        # We use a session_state key to manage the widget value
+        if "muni_search_key" not in st.session_state:
+            st.session_state.muni_search_key = "Select to add..."
+
+        drop_selection = st.selectbox(
+            "Search & Add Municipality", 
+            ["Select to add..."] + muni_names,
+            key="muni_picker"
+        )
         
         if drop_selection != "Select to add...":
             if drop_selection not in st.session_state.selected_areas:
-                target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection]
+                target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
                 st.session_state.selected_areas[drop_selection] = target
-                # Zoom to most recent addition
+                
+                # Update ViewState for Zoom
                 b = target.total_bounds
-                st.session_state.map_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12)
+                st.session_state.map_view = pdk.ViewState(
+                    latitude=(b[1]+b[3])/2, 
+                    longitude=(b[0]+b[2])/2, 
+                    zoom=12,
+                    pitch=0,
+                    bearing=0
+                )
+            # Reset the picker and rerun once
+            st.session_state.muni_picker = "Select to add..."
             st.rerun()
 
-    # 4. Add via Upload
+    # --- FIX: Upload with Zoom Logic ---
     up_zip = st.file_uploader("Add Watershed Boundary (ZIP)", type="zip")
     if up_zip:
-        with tempfile.TemporaryDirectory() as td:
-            with zipfile.ZipFile(up_zip, "r") as z: z.extractall(td)
-            if shps := list(Path(td).rglob("*.shp")):
-                new_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
-                st.session_state.selected_areas[up_zip.name] = new_gdf
+        if up_zip.name not in st.session_state.selected_areas:
+            with tempfile.TemporaryDirectory() as td:
+                with zipfile.ZipFile(up_zip, "r") as z: z.extractall(td)
+                if shps := list(Path(td).rglob("*.shp")):
+                    new_gdf = gpd.read_file(shps[0]).to_crs("EPSG:4326")
+                    st.session_state.selected_areas[up_zip.name] = new_gdf
+                    
+                    # Update ViewState for Zoom
+                    b = new_gdf.total_bounds
+                    st.session_state.map_view = pdk.ViewState(
+                        latitude=(b[1]+b[3])/2, 
+                        longitude=(b[0]+b[2])/2, 
+                        zoom=12
+                    )
+                    st.rerun()
 
-    # 5. Display Active Selection "Chips"
     if st.session_state.selected_areas:
         st.write("---")
-        st.caption("Active Selections (will be combined):")
+        st.caption("Active Selections:")
         for name in list(st.session_state.selected_areas.keys()):
             cols = st.columns([0.8, 0.2])
             cols[0].markdown(f"📍 **{name}**")
@@ -587,36 +610,26 @@ with st.sidebar:
                 del st.session_state.selected_areas[name]
                 st.rerun()
 
-    if st.session_state.processing_msg: st.caption(st.session_state.processing_msg)
-
     if st.button("Run Processing", use_container_width=True):
         if not st.session_state.selected_areas:
             st.error("Select at least one area first.")
         else:
             try:
-                # Combine all selected polygons into one GDF for processing
+                # Combine selections
                 st.session_state.active_gdf = pd.concat(st.session_state.selected_areas.values())
-                basin_name = "Combined_Area" if len(st.session_state.selected_areas) > 1 else list(st.session_state.selected_areas.keys())[0]
-                basin_name = basin_name.replace(" ", "_")
-
-                # (Keep all your existing Processing logic below this line)
-                # ... [Internal logic for bounds, downloading, scaling, etc.] ...
-                # 1. Setup spatial bounds (CROP TO BASIN)
+                # ... [Rest of your existing processing logic stays here] ...
                 b = st.session_state.active_gdf.total_bounds
                 BUFFER_DEG = 0.35
                 lon_min, lat_min, lon_max, lat_max = b[0]-BUFFER_DEG, b[1]-BUFFER_DEG, b[2]+BUFFER_DEG, b[3]+BUFFER_DEG
-
+                
                 start_dt = datetime.combine(s_date, datetime.strptime(s_time, "%H:%M").time())
                 end_dt   = datetime.combine(e_date, datetime.strptime(e_time, "%H:%M").time())
-                
-                if start_dt < min_local_dt:
-                    start_dt = min_local_dt
+                if start_dt < min_local_dt: start_dt = min_local_dt
 
                 ro_times = list(pd.date_range(start_dt + timedelta(minutes=15), end_dt, freq="15min"))
                 mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1H"))
 
                 pb, msg = st.progress(0.0), st.empty()
-                
                 ro_list, ro_kept = [], []
                 for i, t in enumerate(ro_times):
                     msg.info(f"RO → {i+1}/{len(ro_times)}")
@@ -681,11 +694,11 @@ with st.sidebar:
                 st.session_state.radar_cache = cache
                 st.session_state.time_list = sorted(cache.keys())
                 st.session_state.current_time_label = st.session_state.time_list[0] if st.session_state.time_list else None
+                basin_name = list(st.session_state.selected_areas.keys())[0].replace(" ", "_")
                 st.session_state.basin_vault[basin_name] = pd.DataFrame(stats)
                 msg.success("Complete."); st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}"); st.stop()
-
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
 # =============================
@@ -698,7 +711,7 @@ if st.session_state.is_playing:
 
 layers = []
 
-# Layer 1: Background Municipality Reference (Pickable)
+# Layer 1: Municipalities
 if show_muni_map and muni_gdf is not None:
     layers.append(pdk.Layer(
         "GeoJsonLayer",
@@ -706,16 +719,15 @@ if show_muni_map and muni_gdf is not None:
         pickable=True,
         stroked=True,
         filled=True,
-        get_fill_color=[255, 255, 255, 10], # Ghostly fill
+        get_fill_color=[255, 255, 255, 10],
         get_line_color=[255, 255, 255, 60],
         line_width_min_pixels=1,
     ))
 
-# Layer 2: Radar Imagery
+# Layer 2: Radar
 if st.session_state.time_list and st.session_state.current_time_label:
     if st.session_state.current_time_label not in st.session_state.time_list:
         st.session_state.current_time_label = st.session_state.time_list[0]
-
     curr = st.session_state.radar_cache[st.session_state.current_time_label]
     layers.append(pdk.Layer(
         "BitmapLayer",
@@ -724,7 +736,7 @@ if st.session_state.time_list and st.session_state.current_time_label:
         opacity=0.70
     ))
 
-# Layer 3: Active Selection Highlight (The Blue Outlines)
+# Layer 3: Selected Highlights
 if st.session_state.selected_areas:
     active_overlay = pd.concat(st.session_state.selected_areas.values())
     layers.append(pdk.Layer(
@@ -732,7 +744,7 @@ if st.session_state.selected_areas:
         active_overlay.__geo_interface__,
         stroked=True,
         filled=False,
-        get_line_color=[1, 160, 254], # Bright Cyan-Blue
+        get_line_color=[1, 160, 254],
         line_width_min_pixels=3
     ))
 
@@ -743,18 +755,27 @@ deck = pdk.Deck(
     tooltip={"text": "{GNIS_NAME}"} if show_muni_map else None
 )
 
-# Render and catch click data
-deck_key = f"map_{st.session_state.current_time_label}"
+# FIX: Unique key includes the area names to force map refresh on selection
+selection_hash = "_".join(st.session_state.selected_areas.keys())
+deck_key = f"map_{st.session_state.current_time_label}_{selection_hash}"
 map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
 
-# 7. INTERACTIVITY LOGIC: Catch Map Clicks
+# 7. INTERACTIVITY: Catch Map Clicks
 if map_event and map_event.get("last_clicked"):
     picked_obj = map_event["last_clicked"].get("object")
     if picked_obj and "GNIS_NAME" in picked_obj:
         name = picked_obj["GNIS_NAME"]
         if name not in st.session_state.selected_areas:
-            # We filter the GDF for that name and add it to state
-            st.session_state.selected_areas[name] = muni_gdf[muni_gdf["GNIS_NAME"] == name]
+            target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
+            st.session_state.selected_areas[name] = target
+            
+            # Update ViewState for Zoom on Click
+            b = target.total_bounds
+            st.session_state.map_view = pdk.ViewState(
+                latitude=(b[1]+b[3])/2, 
+                longitude=(b[0]+b[2])/2, 
+                zoom=12
+            )
             st.rerun()
             
 # =============================
@@ -834,4 +855,5 @@ with st.sidebar:
         st.pyplot(fig)
         
         csv_download_link(df, f"{basin_name}_rain.csv", f"Export {basin_name} Data")
+
 
