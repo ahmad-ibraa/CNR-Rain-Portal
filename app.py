@@ -736,7 +736,7 @@ with st.sidebar:
                 else:
                     width = 0.01  # Fallback width if only one point exists
     
-                fig, ax = plt.subplots(figsize=(12, 8))
+                fig, ax = plt.subplots(figsize=(8, 12))
                 
                 # 2. Plot with correct width and 'edge' alignment 
                 # align='edge' starts the bar exactly at the timestamp, preventing overlap
@@ -900,6 +900,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
