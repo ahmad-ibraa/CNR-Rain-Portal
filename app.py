@@ -356,7 +356,33 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+/* Center the dialog and give it a real size */
+div[role="dialog"]{
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+}
 
+/* The dialog "card" */
+div[role="dialog"] > div{
+  width: min(1200px, 92vw) !important;
+  max-width: 92vw !important;
+  padding: 14px 16px !important;
+  border-radius: 14px !important;
+  background: rgba(10,10,10,0.98) !important;
+}
+
+/* Make contents inside the dialog expand */
+div[role="dialog"] [data-testid="stVerticalBlock"],
+div[role="dialog"] .stElementContainer,
+div[role="dialog"] .element-container{
+  width: 100% !important;
+  max-width: 100% !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # =============================
 # 3) STATE (must be before any st.session_state access)
@@ -457,7 +483,7 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         ax.spines["bottom"].set_color("white")
         ax.spines["left"].set_color("white")
 
-        st.pyplot(fig, use_container_width=False)
+        st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
     if _HAS_DIALOG:
@@ -970,6 +996,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
