@@ -356,48 +356,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-/* Make the dialog overlay cover the FULL viewport (not the Streamlit column) */
-div[role="dialog"]{
-  position: fixed !important;
-  inset: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  z-index: 10000000 !important;
-}
 
-/* The dialog card */
-div[role="dialog"] > div{
-  width: min(1200px, 92vw) !important;
-  max-width: 92vw !important;
-  background: rgba(10,10,10,0.98) !important;
-  border-radius: 14px !important;
-  padding: 10px 12px !important;
-  overflow: hidden !important;
-}
-
-/* Remove inner wrapper constraints + center all content */
-div[role="dialog"] [data-testid="stDialog"],
-div[role="dialog"] [data-testid="stDialog"] > div,
-div[role="dialog"] [data-testid="stVerticalBlock"]{
-  width: 100% !important;
-  max-width: 100% !important;
-  margin: 0 !important;
-}
-
-/* Center plot output (st.pyplot renders an <img>) */
-div[role="dialog"] img{
-  display: block !important;
-  margin: 0 auto !important;
-  max-width: 100% !important;
-  height: auto !important;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # =============================
 # 3) STATE (must be before any st.session_state access)
@@ -458,7 +417,8 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         width_days = step / 86400.0
 
     def _plot():
-        fig, ax = plt.subplots(figsize=(16, 6), dpi=150)
+        # Adjusted figsize slightly; use_container_width will handle the actual scaling
+        fig, ax = plt.subplots(figsize=(12, 5), dpi=150)
 
         ax.bar(df["time"], df["rain_in"], width=width_days, align="edge",
                edgecolor="white", linewidth=0.6)
@@ -470,7 +430,7 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
 
-        ax.set_title(f"{title} Rainfall (in)", fontsize=14, color="white", pad=10)
+        # We omit ax.set_title here because the Streamlit dialog handles the title natively!
         ax.set_ylabel("Rainfall (in)", fontsize=11, color="white")
         ax.tick_params(axis="both", colors="white", labelsize=9)
 
@@ -483,16 +443,21 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         ax.spines["bottom"].set_color("white")
         ax.spines["left"].set_color("white")
 
-        # IMPORTANT: keep False
+        # Automatically removes excess matplotlib whitespace/margins
+        fig.tight_layout()
+
+        # IMPORTANT: keep True so it fills the modal perfectly
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
     if _HAS_DIALOG:
-        @st.dialog(title)
+        # Pass width="large" to get a wide, native Streamlit modal
+        @st.dialog(title, width="large")
         def _dlg():
             _plot()
         _dlg()
     else:
+        st.markdown(f"### {title}")
         _plot()
 
 def normalize_grid(da: xr.DataArray) -> xr.DataArray:
@@ -969,6 +934,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
