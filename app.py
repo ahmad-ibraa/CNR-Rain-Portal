@@ -486,33 +486,6 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
-    if _HAS_DIALOG:
-
-        st.markdown(
-            """
-            <style>
-            div[role="dialog"] > div{
-              width: fit-content !important;
-              height: fit-content !important;
-              max-width: 92vw !important;
-              max-height: 85vh !important;
-              padding: 12px 12px !important;
-              overflow: auto !important;
-              border-radius: 14px !important;
-              background: rgba(10,10,10,0.98) !important;
-            }
-
-            div[role="dialog"] .stElementContainer,
-            div[role="dialog"] .element-container,
-            div[role="dialog"] [data-testid="stVerticalBlock"]{
-              width: fit-content !important;
-              max-width: 92vw !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
         @st.dialog(title)
         def _dlg():
             _render()
@@ -996,6 +969,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
