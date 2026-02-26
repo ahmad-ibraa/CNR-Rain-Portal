@@ -20,10 +20,6 @@ import time
 import base64
 from zoneinfo import ZoneInfo
 import matplotlib.dates as mdates
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-import json
-
 UTC_TZ = ZoneInfo("UTC")
 
 # user-selectable timezones (add/remove as you like)
@@ -146,25 +142,6 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
 """,
     unsafe_allow_html=True,
 )
-st.markdown("""
-<style>
-/* Sidebar button hover/active */
-[data-testid="stSidebar"] .stButton button:hover{
-  filter: brightness(1.10);
-  transform: translateY(-1px);
-}
-
-[data-testid="stSidebar"] .stButton button:active{
-  filter: brightness(0.95);
-  transform: translateY(0px);
-}
-
-/* optional: smoother */
-[data-testid="stSidebar"] .stButton button{
-  transition: filter 120ms ease, transform 120ms ease;
-}
-</style>
-""", unsafe_allow_html=True)
 st.markdown("""
 <style>
 /* map still interactive */
@@ -390,33 +367,20 @@ defaults = {
     "time_list": [],
     "active_gdf": None,
     "basin_vault": {},
-    "map_view": {"latitude": 40.7, "longitude": -74.0, "zoom": 9, "pitch": 0, "bearing": 0},
+    "map_view": pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9),
     "img_dir": tempfile.mkdtemp(prefix="radar_png_"),
     "is_playing": False,
     "current_time_index": 0,
-    "current_time_label": None,
     "processing_msg": "",
     "tz_name": "America/New_York",
-    "radar_footprint": None,
-    "timeline_slider": None,
-    "play_tick": 0,
 }
-
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
-if isinstance(st.session_state.map_view, pdk.ViewState):
-    st.session_state.map_view = {
-        "latitude": (b[1]+b[3])/2,
-        "longitude": (b[0]+b[2])/2,
-        "zoom": 12,
-        "pitch": 0,
-        "bearing": 0,
-    }
 if "current_time_label" not in st.session_state:
     st.session_state.current_time_label = None
-LOCAL_TZ = ZoneInfo(st.session_state.get("tz_name", "America/New_York"))
-CFGRIB_LOCK = threading.Lock()
+
+
 
 RADAR_COLORS = ["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"]
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
@@ -427,10 +391,6 @@ RO_S3_BASE   = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_0
 # =============================
 # 4) HELPERS
 # =============================
-def gdf_to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
-    # ensures everything is pure python + json-friendly
-    return json.loads(gdf.to_json())
-    
 def csv_download_link(df: pd.DataFrame, filename: str, label: str):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     b64 = base64.b64encode(csv_bytes).decode()
@@ -439,7 +399,81 @@ def csv_download_link(df: pd.DataFrame, filename: str, label: str):
         f'<div class="output-link">📄 <a download="{filename}" href="{href}">{label}</a></div>',
         unsafe_allow_html=True,
     )
+# -----------------------------
+# BIG popup plot helper
+# -----------------------------
+_HAS_DIALOG = hasattr(st, "dialog")
 
+def show_big_plot_popup(title: str, df: pd.DataFrame):
+    # Determine bar width in days (matplotlib date axis uses days)
+    if len(df) > 1:
+        delta_seconds = (df["time"].iloc[1] - df["time"].iloc[0]).total_seconds()
+        width_days = delta_seconds / 86400.0
+    else:
+        delta_seconds = 3600.0
+        width_days = 0.02
+
+    def _render():
+        # BIGGER figure
+        fig, ax = plt.subplots(figsize=(18, 9), dpi=140)
+
+        ax.bar(
+            df["time"],
+            df["rain_in"],
+            width=width_days,
+            align="edge",
+            edgecolor="white",
+            linewidth=0.6,
+        )
+
+        ax.set_xlim(df["time"].min(), df["time"].max() + timedelta(seconds=delta_seconds))
+
+        locator = mdates.AutoDateLocator(minticks=5, maxticks=10)
+        formatter = mdates.ConciseDateFormatter(locator)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
+
+        ax.set_title(f"{title} Rainfall (in)", fontsize=16, color="white", pad=12)
+        ax.set_ylabel("Rainfall (in)", fontsize=12, color="white")
+        ax.tick_params(axis="both", colors="white", labelsize=10)
+
+        ax.set_facecolor("#111")
+        fig.patch.set_facecolor("#111")
+
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["bottom"].set_color("white")
+        ax.spines["left"].set_color("white")
+
+        ax.grid(True, alpha=0.15)
+
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
+
+    if _HAS_DIALOG:
+        # A little CSS to make the dialog itself bigger
+        st.markdown(
+            """
+            <style>
+            /* Make the dialog wider/taller (Streamlit dialog is rendered in an overlay) */
+            div[role="dialog"] > div {
+                width: min(1200px, 92vw) !important;
+                max-width: 92vw !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        @st.dialog(title)
+        def _dlg():
+            _render()
+
+        _dlg()
+    else:
+        # Fallback (still big, but inline)
+        st.info("Popup dialogs aren't available in this Streamlit version. Showing the large plot inline.")
+        _render()
 def normalize_grid(da: xr.DataArray) -> xr.DataArray:
     if da is None: return None
     return da.assign_coords(latitude=da.latitude.round(4), longitude=da.longitude.round(4))
@@ -509,13 +543,6 @@ def utc_naive_to_local_naive(dt_utc_naive: datetime) -> datetime:
 def ceil_to_hour(dt: datetime) -> datetime:
     dt0 = dt.replace(minute=0, second=0, microsecond=0)
     return dt0 if dt == dt0 else (dt0 + timedelta(hours=1))
-    
-def fetch_precip_safe(file_type: str, t: datetime):
-    try:
-        da = load_precip(file_type, t)
-        return (t, da)
-    except Exception:
-        return (t, None)
 
 def load_precip(file_type: str, dt_local_naive: datetime) -> xr.DataArray | None:
     dt_utc = local_naive_to_utc(dt_local_naive)
@@ -530,10 +557,9 @@ def load_precip(file_type: str, dt_local_naive: datetime) -> xr.DataArray | None
         r.raise_for_status()
         with gzip.GzipFile(fileobj=r.raw) as gz, open(tmp_path, "wb") as f:
             shutil.copyfileobj(gz, f)
-        with CFGRIB_LOCK:
-            with xr.open_dataset(tmp_path, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
-                var = list(ds.data_vars)[0]
-                da = ds[var].clip(min=0).load()
+        with xr.open_dataset(tmp_path, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
+            var = list(ds.data_vars)[0]
+            da = ds[var].clip(min=0).load()
         da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
         da = da.rio.write_crs("EPSG:4326")
         return normalize_to_latlon(da)
@@ -547,26 +573,11 @@ def drop_time_coord(da: xr.DataArray) -> xr.DataArray:
 def save_frame_png(da: xr.DataArray, dt_local_naive: datetime) -> tuple[str, list]:
     data = da.values.astype("float32")
     data[data < 0.1] = np.nan
-
-    img_path = os.path.join(
-        st.session_state.img_dir,
-        f"radar_{dt_local_naive.strftime('%Y%m%d_%H%M%S')}.png"
-    )
+    img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_local_naive.strftime('%Y%m%d_%H%M')}.png")
     plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
-
-    west  = float(da.longitude.min())
-    south = float(da.latitude.min())
-    east  = float(da.longitude.max())
-    north = float(da.latitude.max())
-    
-    bounds = [[west, south], [east, north]]
+    bounds = [float(da.longitude.min()), float(da.latitude.min()), float(da.longitude.max()), float(da.latitude.max())]
     return img_path, bounds
-@st.cache_data(show_spinner=False)
-def png_to_data_url(path: str) -> str:
-    import base64
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    return f"data:image/png;base64,{b64}"
+
 def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> float:
     if ws_gdf is None: return float(da_full.mean().values) / 25.4
     try:
@@ -574,224 +585,6 @@ def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> floa
         clipped = sub.rio.clip(ws_gdf.geometry, ws_gdf.crs, drop=True)
         return float(clipped.mean().values) / 25.4 if clipped.size > 0 else float(da_full.mean().values) / 25.4
     except: return float(da_full.mean().values) / 25.4
-
-def _edges_from_centers(c):
-    """Given 1D centers, return 1D edges with len = len(c)+1 (extrapolated at ends)."""
-    c = np.asarray(c, dtype="float64")
-    mid = (c[:-1] + c[1:]) / 2.0
-    e = np.empty(len(c) + 1, dtype="float64")
-    e[1:-1] = mid
-    e[0] = c[0] - (mid[0] - c[0])
-    e[-1] = c[-1] + (c[-1] - mid[-1])
-    return e
-
-def _add_seg(segset, a, b):
-    """Add an undirected segment (a->b) using canonical ordering for dedupe."""
-    if a <= b:
-        segset.add((a, b))
-    else:
-        segset.add((b, a))
-
-def _stitch_segments_to_rings(segments):
-    """
-    Stitch undirected segments into one or more closed rings.
-    segments: set of ((x1,y1),(x2,y2)) in float tuples
-    returns list of rings, each ring is list of (x,y) (closed: last == first)
-    """
-    # adjacency: point -> list of neighbors
-    adj = {}
-    for a, b in segments:
-        adj.setdefault(a, []).append(b)
-        adj.setdefault(b, []).append(a)
-
-    rings = []
-    used = set()
-
-    def take_edge(u, v):
-        used.add((u, v)); used.add((v, u))
-
-    for start in list(adj.keys()):
-        # find an unused edge from start
-        nbrs = adj.get(start, [])
-        nxt = None
-        for v in nbrs:
-            if (start, v) not in used:
-                nxt = v
-                break
-        if nxt is None:
-            continue
-
-        ring = [start]
-        u, v = start, nxt
-        take_edge(u, v)
-        ring.append(v)
-
-        # walk until we return to start
-        while True:
-            nbrs = adj.get(v, [])
-            # choose next neighbor that isn't the immediate back edge and isn't used
-            cand = None
-            for w in nbrs:
-                if w == u:
-                    continue
-                if (v, w) not in used:
-                    cand = w
-                    break
-            if cand is None:
-                # either dead-end or only back edge remains; try closing if possible
-                if ring[-1] == start:
-                    break
-                # attempt to close directly
-                if start in nbrs and (v, start) not in used:
-                    take_edge(v, start)
-                    ring.append(start)
-                break
-
-            u, v = v, cand
-            take_edge(u, v)
-            ring.append(v)
-
-            if v == start:
-                break
-
-        # keep only valid closed rings (>= 4 points including closure)
-        if len(ring) >= 4 and ring[0] == ring[-1]:
-            rings.append(ring)
-
-    return rings
-
-def _ring_area_xy(ring):
-    """Shoelace area for ring [(x,y),...,(x,y)] closed."""
-    x = np.array([p[0] for p in ring], dtype="float64")
-    y = np.array([p[1] for p in ring], dtype="float64")
-    return 0.5 * np.abs(np.dot(x[:-1], y[1:]) - np.dot(y[:-1], x[1:]))
-
-def grid_footprint_geojson_from_mask(lat_centers, lon_centers, valid_mask_2d):
-    """
-    Build an irregular footprint polygon from a boolean mask over (lat, lon) grid.
-    valid_mask_2d shape: (nlat, nlon) True where cell is valid (kept/extracted).
-    Returns GeoJSON FeatureCollection with Polygon or MultiPolygon.
-    """
-    latc = np.asarray(lat_centers, dtype="float64")
-    lonc = np.asarray(lon_centers, dtype="float64")
-    mask = np.asarray(valid_mask_2d, dtype=bool)
-
-    # edges (cell boundaries) in degrees
-    late = _edges_from_centers(latc)  # len nlat+1
-    lone = _edges_from_centers(lonc)  # len nlon+1
-
-    nlat, nlon = mask.shape
-    segs = set()
-
-    # For each valid cell, add boundary edges where neighbor is invalid/outside.
-    # We build segments in (lon, lat) space (GeoJSON convention).
-    for i in range(nlat):
-        for j in range(nlon):
-            if not mask[i, j]:
-                continue
-
-            # corners of this cell
-            # lat edges: i..i+1, lon edges: j..j+1
-            # (lon,lat) corners:
-            bl = (float(lone[j]),   float(late[i]))     # bottom-left
-            br = (float(lone[j+1]), float(late[i]))     # bottom-right
-            tr = (float(lone[j+1]), float(late[i+1]))   # top-right
-            tl = (float(lone[j]),   float(late[i+1]))   # top-left
-
-            # neighbors (N,S,E,W) in index space (i-1 is "north" if lat is descending—doesn't matter for topology)
-            # North edge: between tl-tr, neighbor i-1
-            if i == 0 or not mask[i-1, j]:
-                _add_seg(segs, tl, tr)
-            # South edge: between bl-br, neighbor i+1
-            if i == nlat-1 or not mask[i+1, j]:
-                _add_seg(segs, bl, br)
-            # West edge: between bl-tl, neighbor j-1
-            if j == 0 or not mask[i, j-1]:
-                _add_seg(segs, bl, tl)
-            # East edge: between br-tr, neighbor j+1
-            if j == nlon-1 or not mask[i, j+1]:
-                _add_seg(segs, br, tr)
-
-    rings = _stitch_segments_to_rings(segs)
-    if not rings:
-        return None
-
-    # If multiple rings, return MultiPolygon (or choose largest only)
-    # Here: keep all, but you can keep only largest by area if you want.
-    rings_sorted = sorted(rings, key=_ring_area_xy, reverse=True)
-
-    # Build GeoJSON coords. GeoJSON wants [ [ [lon,lat], ... ] ] for Polygon
-    if len(rings_sorted) == 1:
-        coords = [[list(p) for p in rings_sorted[0]]]
-        geom = {"type": "Polygon", "coordinates": coords}
-    else:
-        polys = []
-        for r in rings_sorted:
-            polys.append([[list(p) for p in r]])
-        geom = {"type": "MultiPolygon", "coordinates": polys}
-
-    return {
-        "type": "FeatureCollection",
-        "features": [{
-            "type": "Feature",
-            "properties": {"name": "Radar Grid Footprint"},
-            "geometry": geom
-        }]
-    }
-
-# -----------------------------
-# Modal / popup plot helper
-# -----------------------------
-try:
-    _HAS_DIALOG = hasattr(st, "dialog")
-except Exception:
-    _HAS_DIALOG = False
-
-def show_plot_popup(title: str, df: pd.DataFrame):
-    """Open a popup modal with the rainfall bar chart."""
-    # compute width (days)
-    if len(df) > 1:
-        delta_seconds = (df['time'].iloc[1] - df['time'].iloc[0]).total_seconds()
-        width = delta_seconds / 86400
-    else:
-        delta_seconds = 3600
-        width = 0.01
-
-    def _render():
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.bar(df['time'], df['rain_in'], width=width, align='edge',
-               edgecolor='white', linewidth=0.5)
-
-        ax.set_xlim(df['time'].min(), df['time'].max() + timedelta(seconds=delta_seconds))
-
-        locator = mdates.AutoDateLocator(minticks=3, maxticks=5)
-        formatter = mdates.ConciseDateFormatter(locator)
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(formatter)
-
-        ax.set_title(f"{title} Rainfall (in)", color='white', fontsize=8)
-        ax.tick_params(axis='both', colors='white', labelsize=6)
-        ax.set_facecolor('#111')
-        fig.patch.set_facecolor('#111')
-
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['bottom'].set_color('white')
-        ax.spines['left'].set_color('white')
-
-        st.pyplot(fig)
-        plt.close(fig)
-
-    # Prefer st.dialog (real popup). If not available, fallback is inline expander render.
-    if _HAS_DIALOG:
-        @st.dialog(title)
-        def _dlg():
-            _render()
-        _dlg()
-    else:
-        # Fallback: still gated behind button, but not a true popup
-        st.info("Your Streamlit version doesn’t support dialogs. Showing plot inline.")
-        _render()
 
 # =============================
 # 5) SIDEBAR UI
@@ -847,16 +640,16 @@ with st.sidebar:
             )
         
         # ZOOM Logic
-        if drop_selection != "Type to start...":
+        if drop_selection != "Select to zoom...":
             target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
             b = target.total_bounds
-            # new_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12, pitch=0, bearing=0)
+            new_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12, pitch=0, bearing=0)
             
 
         with col_add:
             st.write("##")
             if st.button("✚", help="Add to Active Selections"):
-                if drop_selection != "Type to start...":
+                if drop_selection != "Select to zoom...":
                     st.session_state.selected_areas[drop_selection] = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
                     st.rerun()
                 else:
@@ -906,75 +699,42 @@ with st.sidebar:
                 if start_dt < min_local_dt: start_dt = min_local_dt
 
                 ro_times = list(pd.date_range(start_dt + timedelta(minutes=15), end_dt, freq="15min"))
-                mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1h"))
+                mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1H"))
 
                 pb, msg = st.progress(0.0), st.empty()
                 
                 # --- FETCH RO ---
-                # --- FETCH RO (NO THREADS) ---
                 ro_list, ro_kept = [], []
-                total = len(ro_times)
-                for i, t in enumerate(ro_times, start=1):
-                    msg.info(f"RO → {i}/{total}")
-                    pb.progress(min(1.0, i / max(1, (len(ro_times) + len(mrms_times)))))
-                
-                    da = load_precip("RO", t.to_pydatetime())   # <- no threads
+                for i, t in enumerate(ro_times):
+                    msg.info(f"RO → {i+1}/{len(ro_times)}")
+                    da = load_precip("RO", t.to_pydatetime())
                     if da is not None:
                         da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
                         ro_list.append(da.astype("float32"))
                         ro_kept.append(t.to_pydatetime())
                 
-                # keep chronological order (important for concat + animation)
-                if ro_kept:
-                    ro_kept, ro_list = zip(*sorted(zip(ro_kept, ro_list), key=lambda x: x[0]))
-                    ro_kept, ro_list = list(ro_kept), list(ro_list)
-                else:
-                    ro_kept, ro_list = [], []
-                
                 if len(ro_list) < 4: raise RuntimeError("Insufficient RO data.")
                 ro = xr.concat(ro_list, dim="time").assign_coords(time=ro_kept)
                 del ro_list; gc.collect()
 
-                # --- FETCH MRMS (NO THREADS) ---
+                # --- FETCH MRMS ---
                 mrms_list, mrms_kept = [], []
-                total = len(mrms_times)
-                
-                for i, t in enumerate(mrms_times, start=1):
-                    msg.info(f"MRMS → {i}/{total}")
-                
-                    # progress across RO + MRMS (RO already finished, so use len(ro_kept) + i)
-                    pb.progress(min(1.0, (len(ro_kept) + i) / max(1, (len(ro_times) + len(mrms_times)))))
-                
+                for j, t in enumerate(mrms_times):
+                    msg.info(f"MRMS → {j+1}/{len(mrms_times)}")
                     da = load_precip("MRMS", t.to_pydatetime())
                     if da is not None:
                         da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
                         mrms_list.append(da.astype("float32"))
                         mrms_kept.append(t.to_pydatetime())
                 
-                if mrms_kept:
-                    mrms_kept, mrms_list = zip(*sorted(zip(mrms_kept, mrms_list), key=lambda x: x[0]))
-                    mrms_kept, mrms_list = list(mrms_kept), list(mrms_list)
-                else:
-                    mrms_kept, mrms_list = [], []
-                
                 if not mrms_list: raise RuntimeError("No MRMS data found.")
                 mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
                 del mrms_list; gc.collect()
-                m0 = mrms.isel(time=0).values
-                valid_mask = np.isfinite(m0)
-                
-                st.session_state.radar_footprint = grid_footprint_geojson_from_mask(
-                    lat_centers=mrms.latitude.values,
-                    lon_centers=mrms.longitude.values,
-                    valid_mask_2d=valid_mask
-                )
-
                 
                 msg.info("Aligning grids...")
                 ro = align_ro_to_mrms_grid_nearest(ro, mrms.isel(time=0))
                 gc.collect()
 
-                
                 msg.info("Calculating Bias Scaling...")
                 ro_hourly, v_times = [], []
                 for T in mrms.time.values:
@@ -1022,16 +782,13 @@ with st.sidebar:
                 st.session_state.radar_cache = cache
                 st.session_state.time_list = sorted(cache.keys())
                 st.session_state.current_time_label = st.session_state.time_list[0] if st.session_state.time_list else None
-                st.session_state.current_time_index = 0
-                st.session_state.timeline_slider = st.session_state.current_time_label
                 
                 # [CHANGE] Save DataFrame for every city into the vault
                 st.session_state.basin_vault = {name: pd.DataFrame(stats) for name, stats in city_stats_container.items()}
                 
                 msg.success("Complete."); st.rerun()
             except Exception as e:
-                st.exception(e)
-                st.stop()
+                st.error(f"Error: {e}"); st.stop()
 
     # --- 7. DOWNLOADS & PLOTS (UPDATED to loop all results) ---
     if st.session_state.basin_vault:
@@ -1053,109 +810,19 @@ with st.sidebar:
                 else:
                     width = 0.01  # Fallback width if only one point exists
     
-                plot_key = f"plot_{name}"
-                if st.button("Plot", key=plot_key):
-                    show_plot_popup(f"Plot {name}", df)
-
-
-# =============================
-# 7) FLOATING CONTROLS
-# =============================
-import streamlit.components.v1 as components
-
-if st.session_state.time_list:
-    # ---------- one-time init for slider/label/index ----------
-    if st.session_state.current_time_label is None:
-        st.session_state.current_time_index = 0
-        st.session_state.current_time_label = st.session_state.time_list[0]
-        st.session_state.timeline_slider = st.session_state.current_time_label
-
-    # If timeline list changed, keep state valid
-    if st.session_state.current_time_label not in st.session_state.time_list:
-        st.session_state.current_time_index = 0
-        st.session_state.current_time_label = st.session_state.time_list[0]
-        st.session_state.timeline_slider = st.session_state.current_time_label
-
-    with st.container():
-        st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
-
-        col_play, col_stop, col_slider, col_txt = st.columns([1.2, 1.2, 12.0, 4])
-
-        with col_play:
-            icon = "⏸" if st.session_state.is_playing else "▶"
-            if st.button(icon, key="timeline_play_pause", help="Play/Pause"):
-                st.session_state.is_playing = not st.session_state.is_playing
-                # no st.rerun() needed
-
-        with col_stop:
-            if st.button("⏹", key="timeline_stop", help="Stop"):
-                st.session_state.is_playing = False
-                st.session_state.current_time_index = 0
-                st.session_state.current_time_label = st.session_state.time_list[0]
-                st.session_state.timeline_slider = st.session_state.current_time_label
-
-        with col_slider:
-            # only sync slider when playing (or when label changed elsewhere)
-            if st.session_state.is_playing:
-                st.session_state.timeline_slider = st.session_state.current_time_label
-        
-            st.select_slider(
-                "Timeline",
-                options=st.session_state.time_list,
-                key="timeline_slider",
-                label_visibility="collapsed",
-            )
-            chosen = st.session_state.timeline_slider
-        
-            if chosen != st.session_state.current_time_label:
-                st.session_state.current_time_label = chosen
-                st.session_state.current_time_index = st.session_state.time_list.index(chosen)
-                st.session_state.is_playing = False
-
-        with col_txt:
-            ts = st.session_state.current_time_label or ""
-            st.markdown(
-                f'<p class="timestamp" style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
-                unsafe_allow_html=True
-            )
-
-    components.html("""
-    <script>
-    (function() {
-      const doc = window.parent.document;
-      const anchor = doc.querySelector('#control_bar_anchor');
-      if (!anchor) return;
-      const wrap =
-        anchor.closest('[data-testid="stVerticalBlock"]') ||
-        anchor.closest('.element-container') ||
-        anchor.parentElement;
-      if (!wrap) return;
-      wrap.classList.add('floating-controls');
-    })();
-    </script>
-    """, height=0)
-
-# =============================
-# 6.5) PLAYBACK ADVANCE (MUST BE AFTER CONTROLS, BEFORE MAP)
-# =============================
-if st.session_state.is_playing and st.session_state.time_list:
-    n = len(st.session_state.time_list)
-
-    # advance
-    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
-    st.session_state.current_time_label = st.session_state.time_list[st.session_state.current_time_index]
-
-    # keep slider synced
-    st.session_state.timeline_slider = st.session_state.current_time_label
-
-    # throttle + rerun
-    time.sleep(0.5)
-    st.rerun()
+                plot_key = f"plot_popup_{name}"
+                if st.button("Plot (Popup)", key=plot_key):
+                    show_big_plot_popup(name, df)
 
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
 # =============================
-
+if st.session_state.is_playing:
+    n = len(st.session_state.time_list)
+    if n > 0:
+        st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
+        time.sleep(0.5)
+        st.rerun()
 
 layers = []
 
@@ -1163,7 +830,7 @@ layers = []
 if show_muni_map and muni_gdf is not None:
     layers.append(pdk.Layer(
         "GeoJsonLayer",
-        gdf_to_geojson_dict(muni_gdf),
+        muni_gdf,
         pickable=True,
         stroked=True,
         filled=True,
@@ -1172,38 +839,27 @@ if show_muni_map and muni_gdf is not None:
         line_width_min_pixels=1,
     ))
 
-# Radar footprint (already dict, but keep it safe)
-if st.session_state.get("radar_footprint"):
-    layers.append(pdk.Layer(
-        "GeoJsonLayer",
-        st.session_state.radar_footprint,   # OK if it's plain dict
-        pickable=False,
-        stroked=True,
-        filled=False,
-        get_line_color=[180, 180, 180],
-        line_width_min_pixels=2,
-    ))
-
-# Radar bitmap
+# Layer 2: Radar
 if st.session_state.time_list and st.session_state.current_time_label:
+    # Validate timestamp exists in current list
+    if st.session_state.current_time_label not in st.session_state.time_list:
+        st.session_state.current_time_label = st.session_state.time_list[0]
+        
     curr = st.session_state.radar_cache[st.session_state.current_time_label]
-    img_data_url = png_to_data_url(curr["path"])
-    if st.session_state.is_playing:
-        img_data_url += f"#t={st.session_state.current_time_index}"
-
     layers.append(pdk.Layer(
         "BitmapLayer",
-        image=img_data_url,
+        image=curr["path"],
         bounds=curr["bounds"],
         opacity=0.70
     ))
 
-# Selected highlights
+# Layer 3: Selected Highlights (Blue outlines)
 if st.session_state.selected_areas:
-    active_overlay = pd.concat(st.session_state.selected_areas.values(), ignore_index=True)
+    # We overlay ALL selected areas
+    active_overlay = pd.concat(st.session_state.selected_areas.values())
     layers.append(pdk.Layer(
         "GeoJsonLayer",
-        gdf_to_geojson_dict(active_overlay),
+        active_overlay.__geo_interface__,
         stroked=True,
         filled=False,
         get_line_color=[1, 160, 254],
@@ -1212,13 +868,13 @@ if st.session_state.selected_areas:
 
 deck = pdk.Deck(
     layers=layers,
-    initial_view_state=pdk.ViewState(**st.session_state.map_view),
+    initial_view_state=st.session_state.map_view,
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     tooltip={"text": "{GNIS_NAME}"} if show_muni_map else None
 )
 
 selection_hash = "_".join(st.session_state.selected_areas.keys())
-deck_key = "map"
+deck_key = f"map_{st.session_state.current_time_label}_{selection_hash}"
 map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
 
 # 7. INTERACTIVITY: Catch Map Clicks
@@ -1236,16 +892,69 @@ if map_event is not None:
                     
                     # Update ViewState
                     b = target.total_bounds
-                    st.session_state.map_view = {
-                        "latitude": (b[1]+b[3])/2,
-                        "longitude": (b[0]+b[2])/2,
-                        "zoom": 12,
-                        "pitch": 0,
-                        "bearing": 0
-                    }
+                    st.session_state.map_view = pdk.ViewState(
+                        latitude=(b[1]+b[3])/2, 
+                        longitude=(b[0]+b[2])/2, 
+                        zoom=12,
+                        pitch=0,
+                        bearing=0
+                    )
                     st.rerun()
     except (KeyError, TypeError):
         pass
+# =============================
+# 7) FLOATING CONTROLS
+# =============================
+import streamlit.components.v1 as components
+
+if st.session_state.time_list:
+    with st.container():
+        st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
+
+        col_slider, col_txt = st.columns([14, 4])
+
+        with col_slider:
+            chosen = st.select_slider(
+                "Timeline",
+                options=st.session_state.time_list,
+                value=st.session_state.current_time_label or st.session_state.time_list[0],
+                label_visibility="collapsed",
+                key="timeline_slider"
+            )
+            if chosen != st.session_state.current_time_label:
+                st.session_state.current_time_label = chosen
+                st.rerun()
+
+        with col_txt:
+            ts = st.session_state.current_time_label or ""
+            st.markdown(
+                f'<p class="timestamp" style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
+                unsafe_allow_html=True
+            )
+
+    # your existing JS that adds .floating-controls stays the same
+    components.html("""
+    <script>
+    (function() {
+      const doc = window.parent.document;
+      const anchor = doc.querySelector('#control_bar_anchor');
+      if (!anchor) return;
+      const wrap =
+        anchor.closest('[data-testid="stVerticalBlock"]') ||
+        anchor.closest('.element-container') ||
+        anchor.parentElement;
+      if (!wrap) return;
+      wrap.classList.add('floating-controls');
+    })();
+    </script>
+    """, height=0)
+
+
+
+
+
+
+
 
 
 
