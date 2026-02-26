@@ -534,14 +534,11 @@ def save_frame_png(da: xr.DataArray, dt_local_naive: datetime) -> tuple[str, lis
     data = da.values.astype("float32")
     data[data < 0.1] = np.nan
 
-    # save to a temp png (matplotlib wants a file)
-    img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_local_naive.strftime('%Y%m%d_%H%M%S')}.png")
+    img_path = os.path.join(
+        st.session_state.img_dir,
+        f"radar_{dt_local_naive.strftime('%Y%m%d_%H%M%S')}.png"
+    )
     plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
-
-    # convert file -> base64 data url (browser-safe for BitmapLayer)
-    with open(img_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    data_url = f"data:image/png;base64,{b64}"
 
     bounds = [
         float(da.longitude.min()),
@@ -549,8 +546,13 @@ def save_frame_png(da: xr.DataArray, dt_local_naive: datetime) -> tuple[str, lis
         float(da.longitude.max()),
         float(da.latitude.max()),
     ]
-    return data_url, bounds
-
+    return img_path, bounds
+@st.cache_data(show_spinner=False)
+def png_to_data_url(path: str) -> str:
+    import base64
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:image/png;base64,{b64}"
 def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> float:
     if ws_gdf is None: return float(da_full.mean().values) / 25.4
     try:
@@ -1178,9 +1180,15 @@ if st.session_state.time_list and st.session_state.current_time_label:
 
     curr = st.session_state.radar_cache[st.session_state.current_time_label]
 
+    img_data_url = png_to_data_url(curr["path"])
+
+    # optional cache-bust (forces deck.gl to treat it as new)
+    if st.session_state.is_playing:
+        img_data_url = img_data_url + f"#t={st.session_state.current_time_index}"
+
     layers.append(pdk.Layer(
         "BitmapLayer",
-        image=curr["path"],   # already a data URL
+        image=img_data_url,
         bounds=curr["bounds"],
         opacity=0.70
     ))
@@ -1237,6 +1245,7 @@ if map_event is not None:
                     st.rerun()
     except (KeyError, TypeError):
         pass
+
 
 
 
