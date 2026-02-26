@@ -21,6 +21,7 @@ import base64
 from zoneinfo import ZoneInfo
 import matplotlib.dates as mdates
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 UTC_TZ = ZoneInfo("UTC")
 
 # user-selectable timezones (add/remove as you like)
@@ -376,13 +377,14 @@ defaults = {
     "tz_name": "America/New_York",
     "radar_footprint": None,
 }
+
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 if "current_time_label" not in st.session_state:
     st.session_state.current_time_label = None
 LOCAL_TZ = ZoneInfo(st.session_state.get("tz_name", "America/New_York"))
-
+CFGRIB_LOCK = threading.Lock()
 
 RADAR_COLORS = ["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"]
 RADAR_CMAP = ListedColormap(RADAR_COLORS)
@@ -492,9 +494,10 @@ def load_precip(file_type: str, dt_local_naive: datetime) -> xr.DataArray | None
         r.raise_for_status()
         with gzip.GzipFile(fileobj=r.raw) as gz, open(tmp_path, "wb") as f:
             shutil.copyfileobj(gz, f)
-        with xr.open_dataset(tmp_path, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
-            var = list(ds.data_vars)[0]
-            da = ds[var].clip(min=0).load()
+        with CFGRIB_LOCK:
+            with xr.open_dataset(tmp_path, engine="cfgrib", backend_kwargs={"indexpath": ""}) as ds:
+                var = list(ds.data_vars)[0]
+                da = ds[var].clip(min=0).load()
         da = da.assign_coords(longitude=((da.longitude + 180) % 360) - 180).sortby("longitude")
         da = da.rio.write_crs("EPSG:4326")
         return normalize_to_latlon(da)
@@ -858,7 +861,7 @@ with st.sidebar:
                 
                 # --- FETCH RO ---
                 ro_list, ro_kept = [], []
-                max_workers = min(12, (os.cpu_count() or 8))
+                max_workers = min(6, (os.cpu_count() or 4))
                 
                 futs = []
                 with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -1169,6 +1172,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
