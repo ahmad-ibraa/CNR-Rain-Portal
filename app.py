@@ -22,6 +22,8 @@ from zoneinfo import ZoneInfo
 import matplotlib.dates as mdates
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import json
+
 UTC_TZ = ZoneInfo("UTC")
 
 # user-selectable timezones (add/remove as you like)
@@ -417,6 +419,10 @@ RO_S3_BASE   = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/RadarOnly_QPE_15M_0
 # =============================
 # 4) HELPERS
 # =============================
+def gdf_to_geojson_dict(gdf: gpd.GeoDataFrame) -> dict:
+    # ensures everything is pure python + json-friendly
+    return json.loads(gdf.to_json())
+    
 def csv_download_link(df: pd.DataFrame, filename: str, label: str):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     b64 = base64.b64encode(csv_bytes).decode()
@@ -1149,7 +1155,7 @@ layers = []
 if show_muni_map and muni_gdf is not None:
     layers.append(pdk.Layer(
         "GeoJsonLayer",
-        muni_gdf,
+        gdf_to_geojson_dict(muni_gdf),
         pickable=True,
         stroked=True,
         filled=True,
@@ -1158,10 +1164,11 @@ if show_muni_map and muni_gdf is not None:
         line_width_min_pixels=1,
     ))
 
+# Radar footprint (already dict, but keep it safe)
 if st.session_state.get("radar_footprint"):
     layers.append(pdk.Layer(
         "GeoJsonLayer",
-        st.session_state.radar_footprint,
+        st.session_state.radar_footprint,   # OK if it's plain dict
         pickable=False,
         stroked=True,
         filled=False,
@@ -1169,45 +1176,31 @@ if st.session_state.get("radar_footprint"):
         line_width_min_pixels=2,
     ))
 
-# Layer 2: Radar
+# Radar bitmap
 if st.session_state.time_list and st.session_state.current_time_label:
-    # Validate timestamp exists in current list
-    if st.session_state.current_time_label not in st.session_state.time_list:
-        st.session_state.current_time_index = 0
-        st.session_state.current_time_label = st.session_state.time_list[0]
-        st.session_state.timeline_slider = st.session_state.current_time_label
-
-
     curr = st.session_state.radar_cache[st.session_state.current_time_label]
-
     img_data_url = png_to_data_url(curr["path"])
-
-    # optional cache-bust (forces deck.gl to treat it as new)
     if st.session_state.is_playing:
-        img_data_url = img_data_url + f"#t={st.session_state.current_time_index}"
+        img_data_url += f"#t={st.session_state.current_time_index}"
 
     layers.append(pdk.Layer(
         "BitmapLayer",
         image=img_data_url,
-        bounds=curr["bounds"],
+        bounds=[float(x) for x in curr["bounds"]],
         opacity=0.70
     ))
 
-# Layer 3: Selected Highlights (Blue outlines)
+# Selected highlights
 if st.session_state.selected_areas:
-    # We overlay ALL selected areas
-    active_overlay = pd.concat(st.session_state.selected_areas.values())
+    active_overlay = pd.concat(st.session_state.selected_areas.values(), ignore_index=True)
     layers.append(pdk.Layer(
         "GeoJsonLayer",
-        active_overlay.__geo_interface__,
+        gdf_to_geojson_dict(active_overlay),
         stroked=True,
         filled=False,
         get_line_color=[1, 160, 254],
         line_width_min_pixels=3
     ))
-
-
-
 
 deck = pdk.Deck(
     layers=layers,
@@ -1245,6 +1238,7 @@ if map_event is not None:
                     st.rerun()
     except (KeyError, TypeError):
         pass
+
 
 
 
