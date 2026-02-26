@@ -412,7 +412,7 @@ _HAS_DIALOG = hasattr(st, "dialog")
 def show_big_plot_popup(title: str, df: pd.DataFrame):
     df = df.copy()
     df["time"] = pd.to_datetime(df["time"])
-    df["time"] = df["time"] - pd.Timedelta(minutes=15
+    df["time"] = df["time"] - pd.Timedelta(minutes=15)
     # Robust bar width (median timestep)
     if len(df) > 1:
         deltas = df["time"].sort_values().diff().dropna().dt.total_seconds().values
@@ -964,6 +964,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
