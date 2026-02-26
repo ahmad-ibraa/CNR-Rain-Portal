@@ -397,6 +397,7 @@ defaults = {
     "tz_name": "America/New_York",
     "radar_footprint": None,
     "timeline_slider": None,
+    "play_tick": 0,
 }
 
 for k, v in defaults.items():
@@ -532,10 +533,23 @@ def drop_time_coord(da: xr.DataArray) -> xr.DataArray:
 def save_frame_png(da: xr.DataArray, dt_local_naive: datetime) -> tuple[str, list]:
     data = da.values.astype("float32")
     data[data < 0.1] = np.nan
-    img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_local_naive.strftime('%Y%m%d_%H%M')}.png")
+
+    # save to a temp png (matplotlib wants a file)
+    img_path = os.path.join(st.session_state.img_dir, f"radar_{dt_local_naive.strftime('%Y%m%d_%H%M%S')}.png")
     plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
-    bounds = [float(da.longitude.min()), float(da.latitude.min()), float(da.longitude.max()), float(da.latitude.max())]
-    return img_path, bounds
+
+    # convert file -> base64 data url (browser-safe for BitmapLayer)
+    with open(img_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    data_url = f"data:image/png;base64,{b64}"
+
+    bounds = [
+        float(da.longitude.min()),
+        float(da.latitude.min()),
+        float(da.longitude.max()),
+        float(da.latitude.max()),
+    ]
+    return data_url, bounds
 
 def watershed_mean_inch(da_full: xr.DataArray, ws_gdf: gpd.GeoDataFrame) -> float:
     if ws_gdf is None: return float(da_full.mean().values) / 25.4
@@ -820,7 +834,7 @@ with st.sidebar:
         if drop_selection != "Type to start...":
             target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
             b = target.total_bounds
-            new_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12, pitch=0, bearing=0)
+            # new_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12, pitch=0, bearing=0)
             
 
         with col_add:
@@ -1027,122 +1041,7 @@ with st.sidebar:
                 if st.button("Plot", key=plot_key):
                     show_plot_popup(f"Plot {name}", df)
 
-# =============================
-# 6) ANIMATION & MAIN DISPLAY
-# =============================
-if st.session_state.is_playing and st.session_state.time_list:
-    n = len(st.session_state.time_list)
 
-    # advance index
-    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
-
-    # sync label + slider
-    st.session_state.current_time_label = st.session_state.time_list[st.session_state.current_time_index]
-    st.session_state.timeline_slider = st.session_state.current_time_label
-
-    time.sleep(0.5)
-    st.rerun()
-
-layers = []
-
-# Layer 1: Municipalities
-if show_muni_map and muni_gdf is not None:
-    layers.append(pdk.Layer(
-        "GeoJsonLayer",
-        muni_gdf,
-        pickable=True,
-        stroked=True,
-        filled=True,
-        get_fill_color=[255, 255, 255, 10],
-        get_line_color=[255, 255, 255, 60],
-        line_width_min_pixels=1,
-    ))
-
-if st.session_state.get("radar_footprint"):
-    layers.append(pdk.Layer(
-        "GeoJsonLayer",
-        st.session_state.radar_footprint,
-        pickable=False,
-        stroked=True,
-        filled=False,
-        get_line_color=[180, 180, 180],
-        line_width_min_pixels=2,
-    ))
-
-# Layer 2: Radar
-if st.session_state.time_list and st.session_state.current_time_label:
-    # Validate timestamp exists in current list
-    if st.session_state.current_time_label not in st.session_state.time_list:
-        st.session_state.current_time_index = 0
-        st.session_state.current_time_label = st.session_state.time_list[0]
-        st.session_state.timeline_slider = st.session_state.current_time_label
-
-    curr = st.session_state.radar_cache[st.session_state.current_time_label]
-
-    img_path = curr["path"]
-    # cache-bust so the browser actually refreshes the bitmap during playback
-    if st.session_state.is_playing:
-        img_path = f"{img_path}?t={st.session_state.current_time_index}"
-
-    layers.append(pdk.Layer(
-        "BitmapLayer",
-        image=img_path,
-        bounds=curr["bounds"],
-        opacity=0.70
-    ))
-
-# Layer 3: Selected Highlights (Blue outlines)
-if st.session_state.selected_areas:
-    # We overlay ALL selected areas
-    active_overlay = pd.concat(st.session_state.selected_areas.values())
-    layers.append(pdk.Layer(
-        "GeoJsonLayer",
-        active_overlay.__geo_interface__,
-        stroked=True,
-        filled=False,
-        get_line_color=[1, 160, 254],
-        line_width_min_pixels=3
-    ))
-
-
-
-
-deck = pdk.Deck(
-    layers=layers,
-    initial_view_state=st.session_state.map_view,
-    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-    tooltip={"text": "{GNIS_NAME}"} if show_muni_map else None
-)
-
-selection_hash = "_".join(st.session_state.selected_areas.keys())
-deck_key = f"map_{selection_hash}"
-map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
-
-# 7. INTERACTIVITY: Catch Map Clicks
-if map_event is not None:
-    try:
-        last_clicked = map_event["last_clicked"]
-        if last_clicked:
-            picked_obj = last_clicked.get("object")
-            if picked_obj and "GNIS_NAME" in picked_obj:
-                name = picked_obj["GNIS_NAME"]
-                # Add to selection if not present
-                if name not in st.session_state.selected_areas:
-                    target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
-                    st.session_state.selected_areas[name] = target
-                    
-                    # Update ViewState
-                    b = target.total_bounds
-                    st.session_state.map_view = pdk.ViewState(
-                        latitude=(b[1]+b[3])/2, 
-                        longitude=(b[0]+b[2])/2, 
-                        zoom=12,
-                        pitch=0,
-                        bearing=0
-                    )
-                    st.rerun()
-    except (KeyError, TypeError):
-        pass
 # =============================
 # 7) FLOATING CONTROLS
 # =============================
@@ -1180,14 +1079,18 @@ if st.session_state.time_list:
                 st.session_state.timeline_slider = st.session_state.current_time_label
 
         with col_slider:
+            # only sync slider when playing (or when label changed elsewhere)
+            if st.session_state.is_playing:
+                st.session_state.timeline_slider = st.session_state.current_time_label
+        
             st.select_slider(
                 "Timeline",
                 options=st.session_state.time_list,
-                key="timeline_slider",                 # <-- IMPORTANT: no value=
+                key="timeline_slider",
                 label_visibility="collapsed",
             )
             chosen = st.session_state.timeline_slider
-
+        
             if chosen != st.session_state.current_time_label:
                 st.session_state.current_time_label = chosen
                 st.session_state.current_time_index = st.session_state.time_list.index(chosen)
@@ -1216,8 +1119,124 @@ if st.session_state.time_list:
     </script>
     """, height=0)
 
+# =============================
+# 6.5) PLAYBACK ADVANCE (MUST BE AFTER CONTROLS, BEFORE MAP)
+# =============================
+if st.session_state.is_playing and st.session_state.time_list:
+    n = len(st.session_state.time_list)
+
+    # advance
+    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
+    st.session_state.current_time_label = st.session_state.time_list[st.session_state.current_time_index]
+
+    # keep slider synced
+    st.session_state.timeline_slider = st.session_state.current_time_label
+
+    # throttle + rerun
+    time.sleep(0.5)
+    st.rerun()
+
+# =============================
+# 6) ANIMATION & MAIN DISPLAY
+# =============================
 
 
+layers = []
+
+# Layer 1: Municipalities
+if show_muni_map and muni_gdf is not None:
+    layers.append(pdk.Layer(
+        "GeoJsonLayer",
+        muni_gdf,
+        pickable=True,
+        stroked=True,
+        filled=True,
+        get_fill_color=[255, 255, 255, 10],
+        get_line_color=[255, 255, 255, 60],
+        line_width_min_pixels=1,
+    ))
+
+if st.session_state.get("radar_footprint"):
+    layers.append(pdk.Layer(
+        "GeoJsonLayer",
+        st.session_state.radar_footprint,
+        pickable=False,
+        stroked=True,
+        filled=False,
+        get_line_color=[180, 180, 180],
+        line_width_min_pixels=2,
+    ))
+
+# Layer 2: Radar
+if st.session_state.time_list and st.session_state.current_time_label:
+    # Validate timestamp exists in current list
+    if st.session_state.current_time_label not in st.session_state.time_list:
+        st.session_state.current_time_index = 0
+        st.session_state.current_time_label = st.session_state.time_list[0]
+        st.session_state.timeline_slider = st.session_state.current_time_label
+
+
+    curr = st.session_state.radar_cache[st.session_state.current_time_label]
+
+    layers.append(pdk.Layer(
+        "BitmapLayer",
+        image=curr["path"],   # already a data URL
+        bounds=curr["bounds"],
+        opacity=0.70
+    ))
+
+# Layer 3: Selected Highlights (Blue outlines)
+if st.session_state.selected_areas:
+    # We overlay ALL selected areas
+    active_overlay = pd.concat(st.session_state.selected_areas.values())
+    layers.append(pdk.Layer(
+        "GeoJsonLayer",
+        active_overlay.__geo_interface__,
+        stroked=True,
+        filled=False,
+        get_line_color=[1, 160, 254],
+        line_width_min_pixels=3
+    ))
+
+
+
+
+deck = pdk.Deck(
+    layers=layers,
+    initial_view_state=st.session_state.map_view,
+    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    tooltip={"text": "{GNIS_NAME}"} if show_muni_map else None
+)
+
+selection_hash = "_".join(st.session_state.selected_areas.keys())
+deck_key = "map"
+map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
+
+# 7. INTERACTIVITY: Catch Map Clicks
+if map_event is not None:
+    try:
+        last_clicked = map_event["last_clicked"]
+        if last_clicked:
+            picked_obj = last_clicked.get("object")
+            if picked_obj and "GNIS_NAME" in picked_obj:
+                name = picked_obj["GNIS_NAME"]
+                # Add to selection if not present
+                if name not in st.session_state.selected_areas:
+                    target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
+                    st.session_state.selected_areas[name] = target
+                    
+                    # Update ViewState
+                    b = target.total_bounds
+                    st.session_state.map_view = pdk.ViewState(
+                        latitude=(b[1]+b[3])/2, 
+                        longitude=(b[0]+b[2])/2, 
+                        zoom=12,
+                        pitch=0,
+                        bearing=0
+                    )
+                    st.rerun()
+    except (KeyError, TypeError):
+        pass
 
 
 
