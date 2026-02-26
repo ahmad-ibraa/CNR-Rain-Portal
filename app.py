@@ -437,20 +437,20 @@ _HAS_DIALOG = hasattr(st, "dialog")
 
 def show_big_plot_popup(title: str, df: pd.DataFrame):
     df = df.copy()
-    df["time"] = pd.to_datetime(df["time"])
-    df["time"] = df["time"] - pd.Timedelta(minutes=15)
+    df["time"] = pd.to_datetime(df["time"]) - pd.Timedelta(minutes=15)  # shift back (cumulative window)
+    df = df.sort_values("time")
 
-    # Robust bar width (median timestep)
+    # bar width = median timestep
     if len(df) > 1:
-        deltas = df["time"].sort_values().diff().dropna().dt.total_seconds().values
-        step = float(np.median(deltas)) if len(deltas) else 3600.0
+        deltas = df["time"].diff().dropna().dt.total_seconds().values
+        step = float(np.median(deltas)) if len(deltas) else 900.0   # fallback 15 min
         width_days = step / 86400.0
     else:
-        step = 3600.0
-        width_days = 0.02
+        step = 900.0
+        width_days = 900.0 / 86400.0
 
-    def _render():
-        fig, ax = plt.subplots(figsize=(24, 10))
+    def _plot():
+        fig, ax = plt.subplots(figsize=(16, 6), dpi=150)  # figsize matters now because container is big
 
         ax.bar(
             df["time"],
@@ -486,11 +486,47 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
+    if _HAS_DIALOG:
+        # IMPORTANT: this CSS must be injected BEFORE opening the dialog
+        st.markdown(
+            """
+            <style>
+            /* center the overlay */
+            div[role="dialog"]{
+              display:flex !important;
+              align-items:center !important;
+              justify-content:center !important;
+            }
+
+            /* the dialog card: big and centered */
+            div[role="dialog"] > div{
+              width: min(1100px, 92vw) !important;
+              height: min(520px, 75vh) !important;
+              max-width: 92vw !important;
+              max-height: 75vh !important;
+              padding: 10px 12px !important;
+              border-radius: 14px !important;
+              background: rgba(10,10,10,0.98) !important;
+              overflow: hidden !important;
+            }
+
+            /* remove extra padding/margins inside */
+            div[role="dialog"] [data-testid="stVerticalBlock"]{
+              gap: 0.25rem !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
         @st.dialog(title)
         def _dlg():
-            _render()
+            _plot()
 
         _dlg()
+    else:
+        st.info("Dialogs not available in this Streamlit version; showing plot inline.")
+        _plot()
 
 def normalize_grid(da: xr.DataArray) -> xr.DataArray:
     if da is None: return None
@@ -966,6 +1002,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
