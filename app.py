@@ -390,7 +390,7 @@ defaults = {
     "time_list": [],
     "active_gdf": None,
     "basin_vault": {},
-    "map_view": pdk.ViewState(latitude=40.7, longitude=-74.0, zoom=9),
+    "map_view": {"latitude": 40.7, "longitude": -74.0, "zoom": 9, "pitch": 0, "bearing": 0},
     "img_dir": tempfile.mkdtemp(prefix="radar_png_"),
     "is_playing": False,
     "current_time_index": 0,
@@ -405,6 +405,14 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+if isinstance(st.session_state.map_view, pdk.ViewState):
+    st.session_state.map_view = {
+        "latitude": (b[1]+b[3])/2,
+        "longitude": (b[0]+b[2])/2,
+        "zoom": 12,
+        "pitch": 0,
+        "bearing": 0,
+    }
 if "current_time_label" not in st.session_state:
     st.session_state.current_time_label = None
 LOCAL_TZ = ZoneInfo(st.session_state.get("tz_name", "America/New_York"))
@@ -1204,7 +1212,7 @@ if st.session_state.selected_areas:
 
 deck = pdk.Deck(
     layers=layers,
-    initial_view_state = pdk.ViewState(**st.session_state.map_view),
+    initial_view_state=pdk.ViewState(**st.session_state.map_view),
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     tooltip={"text": "{GNIS_NAME}"} if show_muni_map else None
 )
@@ -1238,6 +1246,7 @@ if map_event is not None:
                     st.rerun()
     except (KeyError, TypeError):
         pass
+
 
 
 
