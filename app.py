@@ -146,6 +146,25 @@ header, footer, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testi
 )
 st.markdown("""
 <style>
+/* Sidebar button hover/active */
+[data-testid="stSidebar"] .stButton button:hover{
+  filter: brightness(1.10);
+  transform: translateY(-1px);
+}
+
+[data-testid="stSidebar"] .stButton button:active{
+  filter: brightness(0.95);
+  transform: translateY(0px);
+}
+
+/* optional: smoother */
+[data-testid="stSidebar"] .stButton button{
+  transition: filter 120ms ease, transform 120ms ease;
+}
+</style>
+""", unsafe_allow_html=True)
+st.markdown("""
+<style>
 /* map still interactive */
 #deckgl-wrapper, #deckgl-wrapper canvas { pointer-events:auto !important; }
 
@@ -1013,16 +1032,22 @@ with st.sidebar:
 # =============================
 if st.session_state.is_playing and st.session_state.time_list:
     n = len(st.session_state.time_list)
-
-    # advance index
-    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
-
-    # sync label + slider
-    st.session_state.current_time_label = st.session_state.time_list[st.session_state.current_time_index]
-    st.session_state.timeline_slider = st.session_state.current_time_label
-
-    time.sleep(0.5)
+    
+    # 1. Increment Index
+    next_index = (st.session_state.current_time_index + 1) % n
+    st.session_state.current_time_index = next_index
+    
+    # 2. Sync Label
+    new_label = st.session_state.time_list[next_index]
+    st.session_state.current_time_label = new_label
+    
+    # 3. Sync the Slider Widget Key
+    st.session_state["timeline_slider"] = new_label
+    
+    # Small delay for visual smoothness
+    time.sleep(0.1) 
     st.rerun()
+
 
 layers = []
 
@@ -1124,78 +1149,74 @@ if map_event is not None:
                     st.rerun()
     except (KeyError, TypeError):
         pass
+# Ensure the Radar Layer path is updated correctly
+if st.session_state.time_list and st.session_state.current_time_label:
+    curr = st.session_state.radar_cache[st.session_state.current_time_label]
+    img_path = curr["path"]
+    
+    # Add a unique query param to the file path to force Pydeck to reload the image
+    # We use the index to ensure it changes every frame
+    cache_busted_path = f"{img_path}?v={st.session_state.current_time_index}"
+
+    layers.append(pdk.Layer(
+        "BitmapLayer",
+        image=cache_busted_path,
+        bounds=curr["bounds"],
+        opacity=0.70
+    ))
 # =============================
 # 7) FLOATING CONTROLS
 # =============================
 import streamlit.components.v1 as components
 
 if st.session_state.time_list:
-    # ---------- one-time init for slider/label/index ----------
-    if st.session_state.current_time_label is None:
-        st.session_state.current_time_index = 0
-        st.session_state.current_time_label = st.session_state.time_list[0]
-        st.session_state.timeline_slider = st.session_state.current_time_label
-
-    # If timeline list changed, keep state valid
+    # Ensure state is valid
     if st.session_state.current_time_label not in st.session_state.time_list:
-        st.session_state.current_time_index = 0
         st.session_state.current_time_label = st.session_state.time_list[0]
-        st.session_state.timeline_slider = st.session_state.current_time_label
+        st.session_state.current_time_index = 0
 
     with st.container():
         st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
-
         col_play, col_stop, col_slider, col_txt = st.columns([1.2, 1.2, 12.0, 4])
 
         with col_play:
-            icon = "⏸" if st.session_state.is_playing else "▶"
-            if st.button(icon, key="timeline_play_pause", help="Play/Pause"):
+            play_icon = "⏸" if st.session_state.is_playing else "▶"
+            if st.button(play_icon, key="btn_play"):
                 st.session_state.is_playing = not st.session_state.is_playing
-                # no st.rerun() needed
+                st.rerun()
 
         with col_stop:
-            if st.button("⏹", key="timeline_stop", help="Stop"):
+            if st.button("⏹", key="btn_stop"):
                 st.session_state.is_playing = False
                 st.session_state.current_time_index = 0
                 st.session_state.current_time_label = st.session_state.time_list[0]
-                st.session_state.timeline_slider = st.session_state.current_time_label
+                st.session_state["timeline_slider"] = st.session_state.time_list[0]
+                st.rerun()
 
         with col_slider:
-            st.select_slider(
+            # Note: We don't use 'value=' here because we are controlling it via st.session_state["timeline_slider"]
+            selected_time = st.select_slider(
                 "Timeline",
                 options=st.session_state.time_list,
-                key="timeline_slider",                 # <-- IMPORTANT: no value=
+                key="timeline_slider",
                 label_visibility="collapsed",
             )
-            chosen = st.session_state.timeline_slider
-
-            if chosen != st.session_state.current_time_label:
-                st.session_state.current_time_label = chosen
-                st.session_state.current_time_index = st.session_state.time_list.index(chosen)
-                st.session_state.is_playing = False
+            
+            # If the user manually moves the slider, stop the animation and update index
+            if selected_time != st.session_state.current_time_label:
+                st.session_state.current_time_label = selected_time
+                st.session_state.current_time_index = st.session_state.time_list.index(selected_time)
+                # If the change came from a manual click (not the animation loop), stop playing
+                if not st.session_state.is_playing:
+                    pass 
+                # Note: st.rerun() isn't strictly needed here as the slider interaction triggers a rerun
 
         with col_txt:
-            ts = st.session_state.current_time_label or ""
             st.markdown(
-                f'<p class="timestamp" style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
+                f'<p class="timestamp">{st.session_state.current_time_label}</p>',
                 unsafe_allow_html=True
             )
 
-    components.html("""
-    <script>
-    (function() {
-      const doc = window.parent.document;
-      const anchor = doc.querySelector('#control_bar_anchor');
-      if (!anchor) return;
-      const wrap =
-        anchor.closest('[data-testid="stVerticalBlock"]') ||
-        anchor.closest('.element-container') ||
-        anchor.parentElement;
-      if (!wrap) return;
-      wrap.classList.add('floating-controls');
-    })();
-    </script>
-    """, height=0)
 
 
 
