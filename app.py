@@ -381,7 +381,7 @@ for k, v in defaults.items():
         st.session_state[k] = v
 if "current_time_label" not in st.session_state:
     st.session_state.current_time_label = None
-
+LOCAL_TZ = ZoneInfo(st.session_state.get("tz_name", "America/New_York"))
 
 
 RADAR_COLORS = ["#76fffe", "#01a0fe", "#0001ef", "#01ef01", "#019001", "#ffff01", "#e7c001", "#ff9000", "#ff0101"]
@@ -852,7 +852,7 @@ with st.sidebar:
                 if start_dt < min_local_dt: start_dt = min_local_dt
 
                 ro_times = list(pd.date_range(start_dt + timedelta(minutes=15), end_dt, freq="15min"))
-                mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1H"))
+                mrms_times = list(pd.date_range(ceil_to_hour(start_dt + timedelta(minutes=45)), end_dt.replace(minute=0, second=0, microsecond=0), freq="1h"))
 
                 pb, msg = st.progress(0.0), st.empty()
                 
@@ -987,7 +987,8 @@ with st.sidebar:
                 
                 msg.success("Complete."); st.rerun()
             except Exception as e:
-                st.error(f"Error: {e}"); st.stop()
+                st.exception(e)
+                st.stop()
 
     # --- 7. DOWNLOADS & PLOTS (UPDATED to loop all results) ---
     if st.session_state.basin_vault:
@@ -1168,5 +1169,6 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
