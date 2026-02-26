@@ -373,6 +373,7 @@ defaults = {
     "img_dir": tempfile.mkdtemp(prefix="radar_png_"),
     "is_playing": False,
     "current_time_index": 0,
+    "current_time_label": None,
     "processing_msg": "",
     "tz_name": "America/New_York",
     "radar_footprint": None,
@@ -1053,12 +1054,20 @@ if st.session_state.get("radar_footprint"):
 if st.session_state.time_list and st.session_state.current_time_label:
     # Validate timestamp exists in current list
     if st.session_state.current_time_label not in st.session_state.time_list:
+        st.session_state.current_time_index = 0
         st.session_state.current_time_label = st.session_state.time_list[0]
-        
+        st.session_state.timeline_slider = st.session_state.current_time_label
+
     curr = st.session_state.radar_cache[st.session_state.current_time_label]
+
+    img_path = curr["path"]
+    # cache-bust so the browser actually refreshes the bitmap during playback
+    if st.session_state.is_playing:
+        img_path = f"{img_path}?t={st.session_state.current_time_index}"
+
     layers.append(pdk.Layer(
         "BitmapLayer",
-        image=curr["path"],
+        image=img_path,
         bounds=curr["bounds"],
         opacity=0.70
     ))
@@ -1121,10 +1130,16 @@ if map_event is not None:
 import streamlit.components.v1 as components
 
 if st.session_state.time_list:
-    # make sure label exists
+    # ---------- one-time init for slider/label/index ----------
     if st.session_state.current_time_label is None:
-        st.session_state.current_time_label = st.session_state.time_list[0]
         st.session_state.current_time_index = 0
+        st.session_state.current_time_label = st.session_state.time_list[0]
+        st.session_state.timeline_slider = st.session_state.current_time_label
+
+    # If timeline list changed, keep state valid
+    if st.session_state.current_time_label not in st.session_state.time_list:
+        st.session_state.current_time_index = 0
+        st.session_state.current_time_label = st.session_state.time_list[0]
         st.session_state.timeline_slider = st.session_state.current_time_label
 
     with st.container():
@@ -1136,7 +1151,7 @@ if st.session_state.time_list:
             icon = "⏸" if st.session_state.is_playing else "▶"
             if st.button(icon, key="timeline_play_pause", help="Play/Pause"):
                 st.session_state.is_playing = not st.session_state.is_playing
-                # NO st.rerun() — streamlit already reruns on click
+                # no st.rerun() needed
 
         with col_stop:
             if st.button("⏹", key="timeline_stop", help="Stop"):
@@ -1144,23 +1159,20 @@ if st.session_state.time_list:
                 st.session_state.current_time_index = 0
                 st.session_state.current_time_label = st.session_state.time_list[0]
                 st.session_state.timeline_slider = st.session_state.current_time_label
-                # NO st.rerun()
 
         with col_slider:
-            chosen = st.select_slider(
+            st.select_slider(
                 "Timeline",
                 options=st.session_state.time_list,
-                value=st.session_state.timeline_slider or st.session_state.current_time_label,
+                key="timeline_slider",                 # <-- IMPORTANT: no value=
                 label_visibility="collapsed",
-                key="timeline_slider"
             )
+            chosen = st.session_state.timeline_slider
 
-            # always sync label/index from slider
             if chosen != st.session_state.current_time_label:
                 st.session_state.current_time_label = chosen
                 st.session_state.current_time_index = st.session_state.time_list.index(chosen)
                 st.session_state.is_playing = False
-                # NO st.rerun()
 
         with col_txt:
             ts = st.session_state.current_time_label or ""
@@ -1168,7 +1180,7 @@ if st.session_state.time_list:
                 f'<p class="timestamp" style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
                 unsafe_allow_html=True
             )
-    # your existing JS that adds .floating-controls stays the same
+
     components.html("""
     <script>
     (function() {
