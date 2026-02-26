@@ -1030,64 +1030,83 @@ with st.sidebar:
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
 # =============================
-
-# 1. HANDLE ANIMATION LOOP
 if st.session_state.is_playing and st.session_state.time_list:
     n = len(st.session_state.time_list)
-    # Increment Index
-    next_index = (st.session_state.current_time_index + 1) % n
-    st.session_state.current_time_index = next_index
-    
-    # Sync State
-    new_label = st.session_state.time_list[next_index]
-    st.session_state.current_time_label = new_label
-    st.session_state["timeline_slider"] = new_label
-    
-    time.sleep(0.1) 
+
+    # advance index
+    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
+
+    # sync label + slider
+    st.session_state.current_time_label = st.session_state.time_list[st.session_state.current_time_index]
+    st.session_state.timeline_slider = st.session_state.current_time_label
+
+    time.sleep(0.5)
     st.rerun()
 
-# 2. PREPARE LAYERS
 layers = []
 
-# Layer: Municipalities
+# Layer 1: Municipalities
 if show_muni_map and muni_gdf is not None:
     layers.append(pdk.Layer(
-        "GeoJsonLayer", muni_gdf, pickable=True, stroked=True, filled=True,
-        get_fill_color=[255, 255, 255, 10], get_line_color=[255, 255, 255, 60],
+        "GeoJsonLayer",
+        muni_gdf,
+        pickable=True,
+        stroked=True,
+        filled=True,
+        get_fill_color=[255, 255, 255, 10],
+        get_line_color=[255, 255, 255, 60],
         line_width_min_pixels=1,
     ))
 
-# Layer: Radar Footprint
 if st.session_state.get("radar_footprint"):
     layers.append(pdk.Layer(
-        "GeoJsonLayer", st.session_state.radar_footprint, pickable=False, stroked=True, filled=False,
-        get_line_color=[180, 180, 180], line_width_min_pixels=2,
+        "GeoJsonLayer",
+        st.session_state.radar_footprint,
+        pickable=False,
+        stroked=True,
+        filled=False,
+        get_line_color=[180, 180, 180],
+        line_width_min_pixels=2,
     ))
 
-# Layer: RADAR (Correctly cache-busted and added BEFORE map render)
+# Layer 2: Radar
 if st.session_state.time_list and st.session_state.current_time_label:
-    curr = st.session_state.radar_cache.get(st.session_state.current_time_label)
-    if curr:
-        img_path = curr["path"]
-        # The '?v=' forces the map to reload the image texture during animation
-        v_path = f"{img_path}?v={st.session_state.current_time_index}"
-        
-        layers.append(pdk.Layer(
-            "BitmapLayer",
-            image=v_path,
-            bounds=curr["bounds"],
-            opacity=0.70
-        ))
+    # Validate timestamp exists in current list
+    if st.session_state.current_time_label not in st.session_state.time_list:
+        st.session_state.current_time_index = 0
+        st.session_state.current_time_label = st.session_state.time_list[0]
+        st.session_state.timeline_slider = st.session_state.current_time_label
 
-# Layer: Selected Highlights
+    curr = st.session_state.radar_cache[st.session_state.current_time_label]
+
+    img_path = curr["path"]
+    # cache-bust so the browser actually refreshes the bitmap during playback
+    if st.session_state.is_playing:
+        img_path = f"{img_path}?t={st.session_state.current_time_index}"
+
+    layers.append(pdk.Layer(
+        "BitmapLayer",
+        image=img_path,
+        bounds=curr["bounds"],
+        opacity=0.70
+    ))
+
+# Layer 3: Selected Highlights (Blue outlines)
 if st.session_state.selected_areas:
+    # We overlay ALL selected areas
     active_overlay = pd.concat(st.session_state.selected_areas.values())
     layers.append(pdk.Layer(
-        "GeoJsonLayer", active_overlay.__geo_interface__, stroked=True, filled=False,
-        get_line_color=[1, 160, 254], line_width_min_pixels=3
+        "GeoJsonLayer",
+        active_overlay.__geo_interface__,
+        stroked=True,
+        filled=False,
+        get_line_color=[1, 160, 254],
+        line_width_min_pixels=3
     ))
 
-# 3. RENDER MAP
+
+
+
 deck = pdk.Deck(
     layers=layers,
     initial_view_state=st.session_state.map_view,
@@ -1096,79 +1115,111 @@ deck = pdk.Deck(
 )
 
 selection_hash = "_".join(st.session_state.selected_areas.keys())
-map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=f"map_{selection_hash}")
+deck_key = f"map_{selection_hash}"
+map_event = st.pydeck_chart(deck, width="stretch", height=1000, key=deck_key)
 
-# 4. INTERACTIVITY
-if map_event and map_event.get("last_clicked"):
-    picked_obj = map_event["last_clicked"].get("object")
-    if picked_obj and "GNIS_NAME" in picked_obj:
-        name = picked_obj["GNIS_NAME"]
-        if name not in st.session_state.selected_areas:
-            target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
-            st.session_state.selected_areas[name] = target
-            b = target.total_bounds
-            st.session_state.map_view = pdk.ViewState(
-                latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12
-            )
-            st.rerun()
+# 7. INTERACTIVITY: Catch Map Clicks
+if map_event is not None:
+    try:
+        last_clicked = map_event["last_clicked"]
+        if last_clicked:
+            picked_obj = last_clicked.get("object")
+            if picked_obj and "GNIS_NAME" in picked_obj:
+                name = picked_obj["GNIS_NAME"]
+                # Add to selection if not present
+                if name not in st.session_state.selected_areas:
+                    target = muni_gdf[muni_gdf["GNIS_NAME"] == name].copy()
+                    st.session_state.selected_areas[name] = target
+                    
+                    # Update ViewState
+                    b = target.total_bounds
+                    st.session_state.map_view = pdk.ViewState(
+                        latitude=(b[1]+b[3])/2, 
+                        longitude=(b[0]+b[2])/2, 
+                        zoom=12,
+                        pitch=0,
+                        bearing=0
+                    )
+                    st.rerun()
+    except (KeyError, TypeError):
+        pass
 # =============================
 # 7) FLOATING CONTROLS
 # =============================
+import streamlit.components.v1 as components
+
 if st.session_state.time_list:
-    # Anchor for CSS positioning
-    st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
-    
+    # ---------- one-time init for slider/label/index ----------
+    if st.session_state.current_time_label is None:
+        st.session_state.current_time_index = 0
+        st.session_state.current_time_label = st.session_state.time_list[0]
+        st.session_state.timeline_slider = st.session_state.current_time_label
+
+    # If timeline list changed, keep state valid
+    if st.session_state.current_time_label not in st.session_state.time_list:
+        st.session_state.current_time_index = 0
+        st.session_state.current_time_label = st.session_state.time_list[0]
+        st.session_state.timeline_slider = st.session_state.current_time_label
+
     with st.container():
-        # Create the columns for the bar
-        col_play, col_stop, col_slider, col_txt = st.columns([1.5, 1.5, 10, 5])
+        st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
+
+        col_play, col_stop, col_slider, col_txt = st.columns([1.2, 1.2, 12.0, 4])
 
         with col_play:
-            play_label = "⏸" if st.session_state.is_playing else "▶"
-            if st.button(play_label, key="play_btn", use_container_width=True):
+            icon = "⏸" if st.session_state.is_playing else "▶"
+            if st.button(icon, key="timeline_play_pause", help="Play/Pause"):
                 st.session_state.is_playing = not st.session_state.is_playing
-                st.rerun()
+                # no st.rerun() needed
 
         with col_stop:
-            if st.button("⏹", key="stop_btn", use_container_width=True):
+            if st.button("⏹", key="timeline_stop", help="Stop"):
                 st.session_state.is_playing = False
                 st.session_state.current_time_index = 0
                 st.session_state.current_time_label = st.session_state.time_list[0]
-                st.session_state["timeline_slider"] = st.session_state.time_list[0]
-                st.rerun()
+                st.session_state.timeline_slider = st.session_state.current_time_label
 
         with col_slider:
-            # The slider is keyed to "timeline_slider", so updating session_state["timeline_slider"] moves it
-            val = st.select_slider(
-                "Select Time",
+            st.select_slider(
+                "Timeline",
                 options=st.session_state.time_list,
-                key="timeline_slider",
-                label_visibility="collapsed"
+                key="timeline_slider",                 # <-- IMPORTANT: no value=
+                label_visibility="collapsed",
             )
-            # If manually moved by user
-            if val != st.session_state.current_time_label:
-                st.session_state.current_time_label = val
-                st.session_state.current_time_index = st.session_state.time_list.index(val)
-                # If manual move, stop the play
-                if not st.session_state.is_playing:
-                    pass
+            chosen = st.session_state.timeline_slider
+
+            if chosen != st.session_state.current_time_label:
+                st.session_state.current_time_label = chosen
+                st.session_state.current_time_index = st.session_state.time_list.index(chosen)
+                st.session_state.is_playing = False
 
         with col_txt:
+            ts = st.session_state.current_time_label or ""
             st.markdown(
-                f'<div class="timestamp" style="text-align:right;">{st.session_state.current_time_label}</div>', 
+                f'<p class="timestamp" style="color:#01a0fe; margin:0; font-family:monospace; font-size:14px; font-weight:bold; line-height:44px;">{ts}</p>',
                 unsafe_allow_html=True
             )
 
-    # Inject JS to move this container into the floating bar position
     components.html("""
     <script>
     (function() {
       const doc = window.parent.document;
       const anchor = doc.querySelector('#control_bar_anchor');
       if (!anchor) return;
-      const container = anchor.closest('[data-testid="stVerticalBlock"]');
-      if (container) {
-          container.classList.add('floating-controls');
-      }
+      const wrap =
+        anchor.closest('[data-testid="stVerticalBlock"]') ||
+        anchor.closest('.element-container') ||
+        anchor.parentElement;
+      if (!wrap) return;
+      wrap.classList.add('floating-controls');
     })();
     </script>
     """, height=0)
+
+
+
+
+
+
+
+
