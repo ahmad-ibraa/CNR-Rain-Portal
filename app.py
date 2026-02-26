@@ -861,7 +861,7 @@ with st.sidebar:
                 
                 # --- FETCH RO ---
                 ro_list, ro_kept = [], []
-                max_workers = min(6, (os.cpu_count() or 4))
+                max_workers = 1
                 
                 futs = []
                 with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -1172,6 +1172,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
