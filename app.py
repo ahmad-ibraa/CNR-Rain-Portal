@@ -376,6 +376,7 @@ defaults = {
     "processing_msg": "",
     "tz_name": "America/New_York",
     "radar_footprint": None,
+    "timeline_slider": None,
 }
 
 for k, v in defaults.items():
@@ -971,6 +972,8 @@ with st.sidebar:
                 st.session_state.radar_cache = cache
                 st.session_state.time_list = sorted(cache.keys())
                 st.session_state.current_time_label = st.session_state.time_list[0] if st.session_state.time_list else None
+                st.session_state.current_time_index = 0
+                st.session_state.timeline_slider = st.session_state.current_time_label
                 
                 # [CHANGE] Save DataFrame for every city into the vault
                 st.session_state.basin_vault = {name: pd.DataFrame(stats) for name, stats in city_stats_container.items()}
@@ -1007,12 +1010,18 @@ with st.sidebar:
 # =============================
 # 6) ANIMATION & MAIN DISPLAY
 # =============================
-if st.session_state.is_playing:
+if st.session_state.is_playing and st.session_state.time_list:
     n = len(st.session_state.time_list)
-    if n > 0:
-        st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
-        time.sleep(0.5)
-        st.rerun()
+
+    # advance index
+    st.session_state.current_time_index = (st.session_state.current_time_index + 1) % n
+
+    # sync label + slider
+    st.session_state.current_time_label = st.session_state.time_list[st.session_state.current_time_index]
+    st.session_state.timeline_slider = st.session_state.current_time_label
+
+    time.sleep(0.5)
+    st.rerun()
 
 layers = []
 
@@ -1112,31 +1121,47 @@ if map_event is not None:
 import streamlit.components.v1 as components
 
 if st.session_state.time_list:
+    # make sure label exists
+    if st.session_state.current_time_label is None:
+        st.session_state.current_time_label = st.session_state.time_list[0]
+        st.session_state.current_time_index = 0
+        st.session_state.timeline_slider = st.session_state.current_time_label
+
     with st.container():
         st.markdown('<div id="control_bar_anchor"></div>', unsafe_allow_html=True)
 
-        col_play, col_slider, col_txt = st.columns([1.2, 12.8, 4])
+        col_play, col_stop, col_slider, col_txt = st.columns([1.2, 1.2, 12.0, 4])
 
         with col_play:
             icon = "⏸" if st.session_state.is_playing else "▶"
             if st.button(icon, key="timeline_play_pause", help="Play/Pause"):
                 st.session_state.is_playing = not st.session_state.is_playing
-                st.rerun()
-        
+                # NO st.rerun() — streamlit already reruns on click
+
+        with col_stop:
+            if st.button("⏹", key="timeline_stop", help="Stop"):
+                st.session_state.is_playing = False
+                st.session_state.current_time_index = 0
+                st.session_state.current_time_label = st.session_state.time_list[0]
+                st.session_state.timeline_slider = st.session_state.current_time_label
+                # NO st.rerun()
+
         with col_slider:
             chosen = st.select_slider(
                 "Timeline",
                 options=st.session_state.time_list,
-                value=st.session_state.current_time_label or st.session_state.time_list[0],
+                value=st.session_state.timeline_slider or st.session_state.current_time_label,
                 label_visibility="collapsed",
                 key="timeline_slider"
             )
+
+            # always sync label/index from slider
             if chosen != st.session_state.current_time_label:
                 st.session_state.current_time_label = chosen
-                # if user manually scrubs, pause playback (optional; remove if you don’t want this)
+                st.session_state.current_time_index = st.session_state.time_list.index(chosen)
                 st.session_state.is_playing = False
-                st.rerun()
-        
+                # NO st.rerun()
+
         with col_txt:
             ts = st.session_state.current_time_label or ""
             st.markdown(
@@ -1159,6 +1184,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
