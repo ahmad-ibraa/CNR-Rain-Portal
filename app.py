@@ -860,26 +860,18 @@ with st.sidebar:
                 pb, msg = st.progress(0.0), st.empty()
                 
                 # --- FETCH RO ---
+                # --- FETCH RO (NO THREADS) ---
                 ro_list, ro_kept = [], []
-                max_workers = 1
+                total = len(ro_times)
+                for i, t in enumerate(ro_times, start=1):
+                    msg.info(f"RO → {i}/{total}")
+                    pb.progress(min(1.0, i / max(1, (len(ro_times) + len(mrms_times)))))
                 
-                futs = []
-                with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                    for t in ro_times:
-                        futs.append(ex.submit(fetch_precip_safe, "RO", t.to_pydatetime()))
-                
-                    total = len(futs)
-                    done = 0
-                    for fut in as_completed(futs):
-                        tdt, da = fut.result()
-                        done += 1
-                        msg.info(f"RO → {done}/{total}")
-                        pb.progress(min(1.0, done / max(1, (len(ro_times) + len(mrms_times)))))
-                
-                        if da is not None:
-                            da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
-                            ro_list.append(da.astype("float32"))
-                            ro_kept.append(tdt)
+                    da = load_precip("RO", t.to_pydatetime())   # <- no threads
+                    if da is not None:
+                        da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
+                        ro_list.append(da.astype("float32"))
+                        ro_kept.append(t.to_pydatetime())
                 
                 # keep chronological order (important for concat + animation)
                 if ro_kept:
@@ -892,26 +884,21 @@ with st.sidebar:
                 ro = xr.concat(ro_list, dim="time").assign_coords(time=ro_kept)
                 del ro_list; gc.collect()
 
-                # --- FETCH MRMS ---
+                # --- FETCH MRMS (NO THREADS) ---
                 mrms_list, mrms_kept = [], []
-
-                futs = []
-                with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                    for t in mrms_times:
-                        futs.append(ex.submit(fetch_precip_safe, "MRMS", t.to_pydatetime()))
+                total = len(mrms_times)
                 
-                    total = len(futs)
-                    done = 0
-                    for fut in as_completed(futs):
-                        tdt, da = fut.result()
-                        done += 1
-                        msg.info(f"MRMS → {done}/{total}")
-                        pb.progress(min(1.0, (len(ro_kept) + done) / max(1, (len(ro_times) + len(mrms_times)))))
+                for i, t in enumerate(mrms_times, start=1):
+                    msg.info(f"MRMS → {i}/{total}")
                 
-                        if da is not None:
-                            da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
-                            mrms_list.append(da.astype("float32"))
-                            mrms_kept.append(tdt)
+                    # progress across RO + MRMS (RO already finished, so use len(ro_kept) + i)
+                    pb.progress(min(1.0, (len(ro_kept) + i) / max(1, (len(ro_times) + len(mrms_times)))))
+                
+                    da = load_precip("MRMS", t.to_pydatetime())
+                    if da is not None:
+                        da = da.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
+                        mrms_list.append(da.astype("float32"))
+                        mrms_kept.append(t.to_pydatetime())
                 
                 if mrms_kept:
                     mrms_kept, mrms_list = zip(*sorted(zip(mrms_kept, mrms_list), key=lambda x: x[0]))
@@ -1172,6 +1159,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
