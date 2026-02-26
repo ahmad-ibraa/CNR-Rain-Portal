@@ -458,24 +458,35 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         ax.spines["bottom"].set_color("white")
         ax.spines["left"].set_color("white")
 
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, use_container_width=False)
         plt.close(fig)
 
     if _HAS_DIALOG:
         # Make dialog look like a real modal (big + clean)
-        st.markdown(
+       st.markdown(
             """
             <style>
-            /* dialog overlay size */
+            /* Make the Streamlit dialog wrap content instead of forcing a big fixed box */
             div[role="dialog"] > div{
-              width: min(1200px, 92vw) !important;
-              height: min(720px, 82vh) !important;
+              width: fit-content !important;
+              height: fit-content !important;
+        
               max-width: 92vw !important;
-              max-height: 82vh !important;
-              padding: 14px 16px !important;
+              max-height: 85vh !important;
+        
+              padding: 12px 12px !important;
               overflow: auto !important;
+        
               border-radius: 14px !important;
               background: rgba(10,10,10,0.98) !important;
+            }
+        
+            /* Prevent internal blocks from stretching full width */
+            div[role="dialog"] .stElementContainer,
+            div[role="dialog"] .element-container,
+            div[role="dialog"] [data-testid="stVerticalBlock"]{
+              width: fit-content !important;
+              max-width: 92vw !important;
             }
             </style>
             """,
@@ -964,6 +975,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
