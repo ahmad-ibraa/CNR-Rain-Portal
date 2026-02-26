@@ -358,34 +358,43 @@ st.markdown("""
 
 st.markdown("""
 <style>
-/* Dark overlay centered */
+/* Make the dialog overlay cover the FULL viewport (not the Streamlit column) */
 div[role="dialog"]{
-  display:flex !important;
-  align-items:center !important;
-  justify-content:center !important;
-}
-
-/* Streamlit dialog has nested wrappers; hit ALL direct children */
-div[role="dialog"] > div,
-div[role="dialog"] > div > div,
-div[role="dialog"] > div > div > div{
-  width: min(1100px, 92vw) !important;
-  max-width: 92vw !important;
-}
-
-/* Make the *actual content area* not constrain width */
-div[role="dialog"] [data-testid="stDialog"],
-div[role="dialog"] [data-testid="stDialog"] > div{
-  width: 100% !important;
-  max-width: 100% !important;
-}
-
-/* Remove “mystery padding” that shrinks plots */
-div[role="dialog"] [data-testid="stVerticalBlock"]{
-  padding: 0 !important;
+  position: fixed !important;
+  inset: 0 !important;
   margin: 0 !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 10000000 !important;
+}
+
+/* The dialog card */
+div[role="dialog"] > div{
+  width: min(1200px, 92vw) !important;
+  max-width: 92vw !important;
+  background: rgba(10,10,10,0.98) !important;
+  border-radius: 14px !important;
+  padding: 10px 12px !important;
+  overflow: hidden !important;
+}
+
+/* Remove inner wrapper constraints + center all content */
+div[role="dialog"] [data-testid="stDialog"],
+div[role="dialog"] [data-testid="stDialog"] > div,
+div[role="dialog"] [data-testid="stVerticalBlock"]{
   width: 100% !important;
   max-width: 100% !important;
+  margin: 0 !important;
+}
+
+/* Center plot output (st.pyplot renders an <img>) */
+div[role="dialog"] img{
+  display: block !important;
+  margin: 0 auto !important;
+  max-width: 100% !important;
+  height: auto !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -475,7 +484,7 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         ax.spines["left"].set_color("white")
 
         # IMPORTANT: keep False
-        st.pyplot(fig, use_container_width=False)
+        st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
     if _HAS_DIALOG:
@@ -960,6 +969,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
