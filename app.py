@@ -483,7 +483,7 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         ax.spines["bottom"].set_color("white")
         ax.spines["left"].set_color("white")
 
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, use_container_width=False)
         plt.close(fig)
 
     if _HAS_DIALOG:
@@ -1002,6 +1002,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
