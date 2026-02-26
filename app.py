@@ -546,12 +546,12 @@ def save_frame_png(da: xr.DataArray, dt_local_naive: datetime) -> tuple[str, lis
     )
     plt.imsave(img_path, data, cmap=RADAR_CMAP, vmin=0.1, vmax=15.0)
 
-    bounds = [
-        float(da.longitude.min()),
-        float(da.latitude.min()),
-        float(da.longitude.max()),
-        float(da.latitude.max()),
-    ]
+    west  = float(da.longitude.min())
+    south = float(da.latitude.min())
+    east  = float(da.longitude.max())
+    north = float(da.latitude.max())
+    
+    bounds = [[west, south], [east, north]]
     return img_path, bounds
 @st.cache_data(show_spinner=False)
 def png_to_data_url(path: str) -> str:
@@ -1186,7 +1186,7 @@ if st.session_state.time_list and st.session_state.current_time_label:
     layers.append(pdk.Layer(
         "BitmapLayer",
         image=img_data_url,
-        bounds=[float(x) for x in curr["bounds"]],
+        bounds=curr["bounds"],
         opacity=0.70
     ))
 
@@ -1204,7 +1204,7 @@ if st.session_state.selected_areas:
 
 deck = pdk.Deck(
     layers=layers,
-    initial_view_state=st.session_state.map_view,
+    initial_view_state = pdk.ViewState(**st.session_state.map_view),
     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     tooltip={"text": "{GNIS_NAME}"} if show_muni_map else None
 )
@@ -1228,16 +1228,17 @@ if map_event is not None:
                     
                     # Update ViewState
                     b = target.total_bounds
-                    st.session_state.map_view = pdk.ViewState(
-                        latitude=(b[1]+b[3])/2, 
-                        longitude=(b[0]+b[2])/2, 
-                        zoom=12,
-                        pitch=0,
-                        bearing=0
-                    )
+                    st.session_state.map_view = {
+                        "latitude": (b[1]+b[3])/2,
+                        "longitude": (b[0]+b[2])/2,
+                        "zoom": 12,
+                        "pitch": 0,
+                        "bearing": 0
+                    }
                     st.rerun()
     except (KeyError, TypeError):
         pass
+
 
 
 
