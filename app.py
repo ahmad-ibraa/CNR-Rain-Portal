@@ -413,6 +413,7 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
     df = df.copy()
     df["time"] = pd.to_datetime(df["time"])
     df["time"] = df["time"] - pd.Timedelta(minutes=15)
+
     # Robust bar width (median timestep)
     if len(df) > 1:
         deltas = df["time"].sort_values().diff().dropna().dt.total_seconds().values
@@ -423,7 +424,6 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         width_days = 0.02
 
     def _render():
-        # Use a "normal" figsize; let Streamlit stretch it
         fig, ax = plt.subplots(figsize=(12, 5))
 
         ax.bar(
@@ -435,7 +435,6 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
             linewidth=0.6,
         )
 
-        # Tight x-limits so you don’t get huge empty space
         t0 = df["time"].min()
         t1 = df["time"].max()
         ax.set_xlim(t0, t1 + timedelta(seconds=step))
@@ -462,26 +461,21 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         plt.close(fig)
 
     if _HAS_DIALOG:
-        # Make dialog look like a real modal (big + clean)
-       st.markdown(
+
+        st.markdown(
             """
             <style>
-            /* Make the Streamlit dialog wrap content instead of forcing a big fixed box */
             div[role="dialog"] > div{
               width: fit-content !important;
               height: fit-content !important;
-        
               max-width: 92vw !important;
               max-height: 85vh !important;
-        
               padding: 12px 12px !important;
               overflow: auto !important;
-        
               border-radius: 14px !important;
               background: rgba(10,10,10,0.98) !important;
             }
-        
-            /* Prevent internal blocks from stretching full width */
+
             div[role="dialog"] .stElementContainer,
             div[role="dialog"] .element-container,
             div[role="dialog"] [data-testid="stVerticalBlock"]{
@@ -498,6 +492,7 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
             _render()
 
         _dlg()
+
     else:
         st.info("Popup dialogs aren't available in this Streamlit version. Showing the large plot inline.")
         _render()
@@ -975,6 +970,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
