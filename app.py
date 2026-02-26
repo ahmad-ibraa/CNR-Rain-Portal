@@ -404,18 +404,27 @@ def csv_download_link(df: pd.DataFrame, filename: str, label: str):
 # -----------------------------
 _HAS_DIALOG = hasattr(st, "dialog")
 
+# -----------------------------
+# BIG popup plot helper (clean)
+# -----------------------------
+_HAS_DIALOG = hasattr(st, "dialog")
+
 def show_big_plot_popup(title: str, df: pd.DataFrame):
-    # Determine bar width in days (matplotlib date axis uses days)
+    df = df.copy()
+    df["time"] = pd.to_datetime(df["time"])
+    df["time"] = df["time"] - pd.Timedelta(minutes=15
+    # Robust bar width (median timestep)
     if len(df) > 1:
-        delta_seconds = (df["time"].iloc[1] - df["time"].iloc[0]).total_seconds()
-        width_days = delta_seconds / 86400.0
+        deltas = df["time"].sort_values().diff().dropna().dt.total_seconds().values
+        step = float(np.median(deltas)) if len(deltas) else 3600.0
+        width_days = step / 86400.0
     else:
-        delta_seconds = 3600.0
+        step = 3600.0
         width_days = 0.02
 
     def _render():
-        # BIGGER figure
-        fig, ax = plt.subplots(figsize=(18, 9), dpi=140)
+        # Use a "normal" figsize; let Streamlit stretch it
+        fig, ax = plt.subplots(figsize=(12, 5))
 
         ax.bar(
             df["time"],
@@ -426,39 +435,47 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
             linewidth=0.6,
         )
 
-        ax.set_xlim(df["time"].min(), df["time"].max() + timedelta(seconds=delta_seconds))
+        # Tight x-limits so you don’t get huge empty space
+        t0 = df["time"].min()
+        t1 = df["time"].max()
+        ax.set_xlim(t0, t1 + timedelta(seconds=step))
 
-        locator = mdates.AutoDateLocator(minticks=5, maxticks=10)
+        locator = mdates.AutoDateLocator(minticks=6, maxticks=12)
         formatter = mdates.ConciseDateFormatter(locator)
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(formatter)
 
-        ax.set_title(f"{title} Rainfall (in)", fontsize=16, color="white", pad=12)
-        ax.set_ylabel("Rainfall (in)", fontsize=12, color="white")
-        ax.tick_params(axis="both", colors="white", labelsize=10)
+        ax.set_title(f"{title} Rainfall (in)", fontsize=14, color="white", pad=10)
+        ax.set_ylabel("Rainfall (in)", fontsize=11, color="white")
+        ax.tick_params(axis="both", colors="white", labelsize=9)
 
         ax.set_facecolor("#111")
         fig.patch.set_facecolor("#111")
+        ax.grid(True, alpha=0.12)
 
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.spines["bottom"].set_color("white")
         ax.spines["left"].set_color("white")
 
-        ax.grid(True, alpha=0.15)
-
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
     if _HAS_DIALOG:
-        # A little CSS to make the dialog itself bigger
+        # Make dialog look like a real modal (big + clean)
         st.markdown(
             """
             <style>
-            /* Make the dialog wider/taller (Streamlit dialog is rendered in an overlay) */
-            div[role="dialog"] > div {
-                width: min(1200px, 92vw) !important;
-                max-width: 92vw !important;
+            /* dialog overlay size */
+            div[role="dialog"] > div{
+              width: min(1200px, 92vw) !important;
+              height: min(720px, 82vh) !important;
+              max-width: 92vw !important;
+              max-height: 82vh !important;
+              padding: 14px 16px !important;
+              overflow: auto !important;
+              border-radius: 14px !important;
+              background: rgba(10,10,10,0.98) !important;
             }
             </style>
             """,
@@ -471,7 +488,6 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
 
         _dlg()
     else:
-        # Fallback (still big, but inline)
         st.info("Popup dialogs aren't available in this Streamlit version. Showing the large plot inline.")
         _render()
 def normalize_grid(da: xr.DataArray) -> xr.DataArray:
@@ -811,7 +827,7 @@ with st.sidebar:
                     width = 0.01  # Fallback width if only one point exists
     
                 plot_key = f"plot_popup_{name}"
-                if st.button("Plot (Popup)", key=plot_key):
+                if st.button("Plot", key=plot_key):
                     show_big_plot_popup(name, df)
 
 # =============================
@@ -948,6 +964,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
