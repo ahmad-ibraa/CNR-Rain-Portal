@@ -424,7 +424,7 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         width_days = 0.02
 
     def _render():
-        fig, ax = plt.subplots(figsize=(12, 5))
+        fig, ax = plt.subplots(figsize=(24, 10))
 
         ax.bar(
             df["time"],
@@ -970,6 +970,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
