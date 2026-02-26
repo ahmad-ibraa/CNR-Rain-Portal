@@ -793,7 +793,7 @@ with st.sidebar:
             )
         
         # ZOOM Logic
-        if drop_selection != "Select to zoom...":
+        if drop_selection != "Type to start...":
             target = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
             b = target.total_bounds
             new_view = pdk.ViewState(latitude=(b[1]+b[3])/2, longitude=(b[0]+b[2])/2, zoom=12, pitch=0, bearing=0)
@@ -802,7 +802,7 @@ with st.sidebar:
         with col_add:
             st.write("##")
             if st.button("✚", help="Add to Active Selections"):
-                if drop_selection != "Select to zoom...":
+                if drop_selection != "Type to start...":
                     st.session_state.selected_areas[drop_selection] = muni_gdf[muni_gdf["GNIS_NAME"] == drop_selection].copy()
                     st.rerun()
                 else:
@@ -919,11 +919,6 @@ with st.sidebar:
                 if not mrms_list: raise RuntimeError("No MRMS data found.")
                 mrms = xr.concat(mrms_list, dim="time").assign_coords(time=mrms_kept)
                 del mrms_list; gc.collect()
-                
-                msg.info("Aligning grids...")
-                ro = align_ro_to_mrms_grid_nearest(ro, mrms.isel(time=0))
-                gc.collect()
-
                 m0 = mrms.isel(time=0).values
                 valid_mask = np.isfinite(m0)
                 
@@ -933,6 +928,12 @@ with st.sidebar:
                     valid_mask_2d=valid_mask
                 )
 
+                
+                msg.info("Aligning grids...")
+                ro = align_ro_to_mrms_grid_nearest(ro, mrms.isel(time=0))
+                gc.collect()
+
+                
                 msg.info("Calculating Bias Scaling...")
                 ro_hourly, v_times = [], []
                 for T in mrms.time.values:
@@ -1007,33 +1008,6 @@ with st.sidebar:
                     width = delta_seconds / 86400
                 else:
                     width = 0.01  # Fallback width if only one point exists
-    
-                fig, ax = plt.subplots(figsize=(12, 6))
-                
-                # 2. Plot with correct width and 'edge' alignment 
-                # align='edge' starts the bar exactly at the timestamp, preventing overlap
-                ax.bar(df['time'], df['rain_in'], color='#01a0fe', width=width, align='edge', edgecolor='white', linewidth=0.5)
-                
-                # 3. Force the x-axis to respect your actual data range (trims empty space)
-                ax.set_xlim(df['time'].min(), df['time'].max() + timedelta(seconds=delta_seconds))
-    
-                # 4. Dynamic X-Axis Labels (Prevents text overlap)
-                locator = mdates.AutoDateLocator(minticks=3, maxticks=5)
-                formatter = mdates.ConciseDateFormatter(locator)
-                ax.xaxis.set_major_locator(locator)
-                ax.xaxis.set_major_formatter(formatter)
-    
-                # 5. Styling
-                ax.set_title(f"{name} Rainfall (in)", color='white', fontsize=8)
-                ax.tick_params(axis='both', colors='white', labelsize=6)
-                ax.set_facecolor('#111')
-                fig.patch.set_facecolor('#111')
-                
-                # Clean up borders (spines)
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['bottom'].set_color('white')
-                ax.spines['left'].set_color('white')
     
                 plot_key = f"plot_{name}"
                 if st.button("Plot", key=plot_key):
@@ -1194,4 +1168,5 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
