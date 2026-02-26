@@ -358,26 +358,32 @@ st.markdown("""
 
 st.markdown("""
 <style>
-/* Center the dialog and give it a real size */
+/* Dark overlay centered */
 div[role="dialog"]{
   display:flex !important;
   align-items:center !important;
   justify-content:center !important;
 }
 
-/* The dialog "card" */
-div[role="dialog"] > div{
-  width: min(1200px, 92vw) !important;
+/* Streamlit dialog has nested wrappers; hit ALL direct children */
+div[role="dialog"] > div,
+div[role="dialog"] > div > div,
+div[role="dialog"] > div > div > div{
+  width: min(1100px, 92vw) !important;
   max-width: 92vw !important;
-  padding: 14px 16px !important;
-  border-radius: 14px !important;
-  background: rgba(10,10,10,0.98) !important;
 }
 
-/* Make contents inside the dialog expand */
-div[role="dialog"] [data-testid="stVerticalBlock"],
-div[role="dialog"] .stElementContainer,
-div[role="dialog"] .element-container{
+/* Make the *actual content area* not constrain width */
+div[role="dialog"] [data-testid="stDialog"],
+div[role="dialog"] [data-testid="stDialog"] > div{
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* Remove “mystery padding” that shrinks plots */
+div[role="dialog"] [data-testid="stVerticalBlock"]{
+  padding: 0 !important;
+  margin: 0 !important;
   width: 100% !important;
   max-width: 100% !important;
 }
@@ -430,45 +436,30 @@ def csv_download_link(df: pd.DataFrame, filename: str, label: str):
 # -----------------------------
 _HAS_DIALOG = hasattr(st, "dialog")
 
-# -----------------------------
-# BIG popup plot helper (clean)
-# -----------------------------
-_HAS_DIALOG = hasattr(st, "dialog")
-
 def show_big_plot_popup(title: str, df: pd.DataFrame):
     df = df.copy()
-    df["time"] = pd.to_datetime(df["time"]) - pd.Timedelta(minutes=15)  # shift back (cumulative window)
+    df["time"] = pd.to_datetime(df["time"]) - pd.Timedelta(minutes=15)
     df = df.sort_values("time")
 
-    # bar width = median timestep
     if len(df) > 1:
-        deltas = df["time"].diff().dropna().dt.total_seconds().values
-        step = float(np.median(deltas)) if len(deltas) else 900.0   # fallback 15 min
+        step = float(np.median(df["time"].diff().dropna().dt.total_seconds().values)) or 900.0
         width_days = step / 86400.0
     else:
         step = 900.0
-        width_days = 900.0 / 86400.0
+        width_days = step / 86400.0
 
     def _plot():
-        fig, ax = plt.subplots(figsize=(16, 6), dpi=150)  # figsize matters now because container is big
+        fig, ax = plt.subplots(figsize=(16, 6), dpi=150)
 
-        ax.bar(
-            df["time"],
-            df["rain_in"],
-            width=width_days,
-            align="edge",
-            edgecolor="white",
-            linewidth=0.6,
-        )
+        ax.bar(df["time"], df["rain_in"], width=width_days, align="edge",
+               edgecolor="white", linewidth=0.6)
 
-        t0 = df["time"].min()
-        t1 = df["time"].max()
+        t0, t1 = df["time"].min(), df["time"].max()
         ax.set_xlim(t0, t1 + timedelta(seconds=step))
 
         locator = mdates.AutoDateLocator(minticks=6, maxticks=12)
-        formatter = mdates.ConciseDateFormatter(locator)
         ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(formatter)
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
 
         ax.set_title(f"{title} Rainfall (in)", fontsize=14, color="white", pad=10)
         ax.set_ylabel("Rainfall (in)", fontsize=11, color="white")
@@ -483,49 +474,16 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
         ax.spines["bottom"].set_color("white")
         ax.spines["left"].set_color("white")
 
+        # IMPORTANT: keep False
         st.pyplot(fig, use_container_width=False)
         plt.close(fig)
 
     if _HAS_DIALOG:
-        # IMPORTANT: this CSS must be injected BEFORE opening the dialog
-        st.markdown(
-            """
-            <style>
-            /* center the overlay */
-            div[role="dialog"]{
-              display:flex !important;
-              align-items:center !important;
-              justify-content:center !important;
-            }
-
-            /* the dialog card: big and centered */
-            div[role="dialog"] > div{
-              width: min(1100px, 92vw) !important;
-              height: min(520px, 75vh) !important;
-              max-width: 92vw !important;
-              max-height: 75vh !important;
-              padding: 10px 12px !important;
-              border-radius: 14px !important;
-              background: rgba(10,10,10,0.98) !important;
-              overflow: hidden !important;
-            }
-
-            /* remove extra padding/margins inside */
-            div[role="dialog"] [data-testid="stVerticalBlock"]{
-              gap: 0.25rem !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
         @st.dialog(title)
         def _dlg():
             _plot()
-
         _dlg()
     else:
-        st.info("Dialogs not available in this Streamlit version; showing plot inline.")
         _plot()
 
 def normalize_grid(da: xr.DataArray) -> xr.DataArray:
@@ -1002,6 +960,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
