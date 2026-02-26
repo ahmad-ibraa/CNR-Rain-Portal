@@ -492,9 +492,6 @@ def show_big_plot_popup(title: str, df: pd.DataFrame):
 
         _dlg()
 
-    else:
-        st.info("Popup dialogs aren't available in this Streamlit version. Showing the large plot inline.")
-        _render()
 def normalize_grid(da: xr.DataArray) -> xr.DataArray:
     if da is None: return None
     return da.assign_coords(latitude=da.latitude.round(4), longitude=da.longitude.round(4))
@@ -969,6 +966,7 @@ if st.session_state.time_list:
     })();
     </script>
     """, height=0)
+
 
 
 
